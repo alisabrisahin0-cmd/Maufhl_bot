@@ -507,9 +507,10 @@ _Güçlü sinyal bulunca otomatik bildirim gelecek!_""",
             # Biten maçların sonuçlarını gönder
             for mac_id, bilgi in list(biten_maclar.items()):
                 if mac_id not in aktif_idler:
-                    sonuc = sonuc_kontrol(
-                        bilgi['tahmin'],
-                        bilgi['baslangic_ev'],
+                  sonuc = sonuc_kontrol(
+    bilgi['tahmin'],
+    bilgi['baslangic_ev']
+)
                         bilgi['baslangic_dep'],
                         bilgi['son_ev'],
                         bilgi['son_dep']
