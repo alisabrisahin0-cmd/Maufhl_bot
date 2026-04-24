@@ -307,10 +307,10 @@ def sonuc_kontrol(tahmin, baslangic_ev, baslangic_dep, final_ev, final_dep):
 
 
 async def macları_cek():
-    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures?live=all"
+    # Güncellenmiş API-Sports URL ve Headers
+    url = "https://v3.football.api-sports.io/fixtures?live=all"
     headers = {
-        "x-rapidapi-host": "api-football-v1.p.rapidapi.com",
-        "x-rapidapi-key": RAPIDAPI_KEY
+        "x-apisports-key": RAPIDAPI_KEY
     }
     maclar = []
     try:
@@ -509,54 +509,4 @@ _Güçlü sinyal bulunca otomatik bildirim gelecek!_""",
                 if mac_id not in aktif_idler:
                     sonuc = sonuc_kontrol(
                         bilgi['tahmin'],
-                        bilgi['baslangic_ev'],
-                        bilgi['baslangic_dep'],
-                        bilgi['son_ev'],
-                        bilgi['son_dep']
-                    )
-                    await sonuc_bildirimi_gonder(
-                        bot, mac_id,
-                        bilgi['ev'], bilgi['dep'],
-                        bilgi['tahmin'], sonuc,
-                        bilgi['son_ev'], bilgi['son_dep']
-                    )
-                    del biten_maclar[mac_id]
-                    await asyncio.sleep(1)
-
-            # Aktif maçları analiz et
-            for mac in maclar:
-                puan, sinyaller = sinyal_hesapla(mac)
-                mac_id = mac['id']
-
-                if mac_id in bildirim_gonderilen:
-                    biten_maclar[mac_id] = {
-                        'ev': mac['ev'],
-                        'dep': mac['dep'],
-                        'tahmin': bildirim_gonderilen[mac_id]['tahmin'],
-                        'baslangic_ev': bildirim_gonderilen[mac_id]['ev_gol'],
-                        'baslangic_dep': bildirim_gonderilen[mac_id]['dep_gol'],
-                        'son_ev': mac['ev_gol'],
-                        'son_dep': mac['dep_gol'],
-                    }
-
-                if puan >= MIN_PUAN:
-                    onceki_puan = bildirim_gonderilen.get(mac_id, {}).get('puan', 0)
-                    if puan > onceki_puan:
-                        tahmin = tavsiye_uret(mac)
-                        await bildirim_gonder(bot, mac, puan, sinyaller, tahmin)
-                        bildirim_gonderilen[mac_id] = {
-                            'puan': puan,
-                            'tahmin': tahmin,
-                            'ev_gol': mac['ev_gol'],
-                            'dep_gol': mac['dep_gol']
-                        }
-                        await asyncio.sleep(1)
-
-        except Exception as e:
-            logger.error(f"Ana döngü hatası: {e}")
-
-        await asyncio.sleep(sure or 1800)
-
-
-if __name__ == "__main__":
-    asyncio.run(ana_dongu())
+                        bilgi['
