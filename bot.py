@@ -13,11 +13,6 @@ CHAT_ID = os.getenv("CHAT_ID", "")
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 MIN_PUAN = int(os.getenv("MIN_PUAN", "7"))
-
-# Aktif saatler (TR saati)
-AKTIF_BASLANGIC = 15  # 15:00
-AKTIF_BITIS = 23      # 23:00
-KONTROL_SURESI = 360  # 6 dakika
 # =============================================
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -28,10 +23,30 @@ biten_maclar = {}
 db_pool = None
 
 
-def aktif_mi():
-    """Şu an aktif saatte miyiz?"""
+def kontrol_suresi_al():
+    """Saate göre kontrol süresini belirle (saniye)"""
     saat = datetime.now().hour
-    return AKTIF_BASLANGIC <= saat < AKTIF_BITIS
+    dakika = datetime.now().minute
+
+    # 00:00 - 11:30 Uyku
+    if saat < 11 or (saat == 11 and dakika < 30):
+        return None, "uyku"
+
+    # 11:30 - 15:00 Öğle (8 dakika)
+    elif (saat == 11 and dakika >= 30) or (12 <= saat < 15):
+        return 480, "öğle"
+
+    # 15:00 - 19:00 Erken Akşam (7 dakika)
+    elif 15 <= saat < 19:
+        return 420, "erken_aksam"
+
+    # 19:00 - 23:00 Ana Program (6 dakika)
+    elif 19 <= saat < 23:
+        return 360, "ana_program"
+
+    # 23:00 - 00:00 Uyku
+    else:
+        return None, "uyku"
 
 
 async def db_baglant():
@@ -102,7 +117,6 @@ async def haftalik_rapor_gonder(bot):
         kaybeden = len([r for r in rows if r['sonuc'] == 'DSTU'])
         oran = round(kazanan / toplam * 100, 1)
 
-        # En iyi lig
         lig_stats = {}
         for r in rows:
             lig = r['lig']
@@ -114,15 +128,12 @@ async def haftalik_rapor_gonder(bot):
 
         en_iyi_ligs = [(k, v) for k, v in lig_stats.items() if v['t'] >= 2]
         en_iyi_lig = max(en_iyi_ligs, key=lambda x: x[1]['k']/x[1]['t'], default=None)
+        lig_str = f"{en_iyi_lig[0]} (%{round(en_iyi_lig[1]['k']/en_iyi_lig[1]['t']*100,1)})" if en_iyi_lig else "Yeterli veri yok"
 
-        # En iyi puan aralığı
         puan_7_8 = [r for r in rows if 7 <= r['puan'] <= 8]
         puan_9_plus = [r for r in rows if r['puan'] >= 9]
-
         p78_oran = round(len([r for r in puan_7_8 if r['sonuc']=='TUTTU'])/len(puan_7_8)*100, 1) if puan_7_8 else 0
         p9_oran = round(len([r for r in puan_9_plus if r['sonuc']=='TUTTU'])/len(puan_9_plus)*100, 1) if puan_9_plus else 0
-
-        lig_str = f"{en_iyi_lig[0]} (%{round(en_iyi_lig[1]['k']/en_iyi_lig[1]['t']*100,1)})" if en_iyi_lig else "Yeterli veri yok"
 
         mesaj = f"""📊 *HAFTALIK RAPOR*
 ━━━━━━━━━━━━
@@ -135,14 +146,12 @@ async def haftalik_rapor_gonder(bot):
 
 📊 Puan 7-8: %{p78_oran} ({len(puan_7_8)} sinyal)
 🔥 Puan 9+: %{p9_oran} ({len(puan_9_plus)} sinyal)
-
 🏆 En İyi Lig: {lig_str}
 ━━━━━━━━━━━━
 _Veriye dayalı analiz sistemi_"""
 
         await bot.send_message(chat_id=CHAT_ID, text=mesaj, parse_mode=ParseMode.MARKDOWN)
         logger.info("Haftalık rapor gönderildi!")
-
     except Exception as e:
         logger.error(f"Haftalık rapor hatası: {e}")
 
@@ -168,7 +177,6 @@ async def aylik_rapor_gonder(bot):
         kaybeden = len([r for r in rows if r['sonuc'] == 'DSTU'])
         oran = round(kazanan / toplam * 100, 1)
 
-        # En iyi lig
         lig_stats = {}
         tahmin_stats = {}
         for r in rows:
@@ -186,7 +194,6 @@ async def aylik_rapor_gonder(bot):
 
         en_iyi_ligs = [(k, v) for k, v in lig_stats.items() if v['t'] >= 3]
         en_iyi_lig = max(en_iyi_ligs, key=lambda x: x[1]['k']/x[1]['t'], default=None)
-
         en_iyi_tahminler = [(k, v) for k, v in tahmin_stats.items() if v['t'] >= 3]
         en_iyi_tahmin = max(en_iyi_tahminler, key=lambda x: x[1]['k']/x[1]['t'], default=None)
 
@@ -209,7 +216,6 @@ _Veriye dayalı analiz sistemi_"""
 
         await bot.send_message(chat_id=CHAT_ID, text=mesaj, parse_mode=ParseMode.MARKDOWN)
         logger.info("Aylık rapor gönderildi!")
-
     except Exception as e:
         logger.error(f"Aylık rapor hatası: {e}")
 
@@ -320,17 +326,13 @@ async def macları_cek():
                             fixture = f.get('fixture', {})
                             teams = f.get('teams', {})
                             goals = f.get('goals', {})
-                            score = f.get('score', {})
                             league = f.get('league', {})
 
                             mac_id = str(fixture.get('id', ''))
                             ev = teams.get('home', {}).get('name', '?')
                             dep = teams.get('away', {}).get('name', '?')
                             lig = league.get('name', '?')
-
-                            # Dakika
-                            elapsed = fixture.get('status', {}).get('elapsed', 0) or 0
-                            dakika = int(elapsed)
+                            dakika = int(fixture.get('status', {}).get('elapsed', 0) or 0)
 
                             if dakika < 5 or dakika > 85:
                                 continue
@@ -338,27 +340,20 @@ async def macları_cek():
                             ev_gol = int(goals.get('home', 0) or 0)
                             dep_gol = int(goals.get('away', 0) or 0)
 
-                            # Corner ve son gol
                             ev_corner = dep_corner = son_gol = 0
-                            stats = f.get('statistics', [])
-                            for stat in stats:
-                                stat_type = stat.get('type', '').lower()
-                                if 'corner' in stat_type:
-                                    val = stat.get('value', 0) or 0
-                                    team_id = stat.get('team', {}).get('id')
-                                    home_id = teams.get('home', {}).get('id')
-                                    if team_id == home_id:
-                                        ev_corner = int(val)
+                            for stat in f.get('statistics', []):
+                                if 'corner' in stat.get('type', '').lower():
+                                    val = int(stat.get('value', 0) or 0)
+                                    if stat.get('team', {}).get('id') == teams.get('home', {}).get('id'):
+                                        ev_corner = val
                                     else:
-                                        dep_corner = int(val)
+                                        dep_corner = val
 
-                            # Son gol dakikası
-                            events = f.get('events', [])
-                            for event in events:
+                            for event in f.get('events', []):
                                 if event.get('type') == 'Goal':
-                                    gdk = event.get('time', {}).get('elapsed', 0) or 0
-                                    if int(gdk) > son_gol:
-                                        son_gol = int(gdk)
+                                    gdk = int(event.get('time', {}).get('elapsed', 0) or 0)
+                                    if gdk > son_gol:
+                                        son_gol = gdk
 
                             maclar.append({
                                 'id': mac_id, 'ev': ev, 'dep': dep, 'lig': lig,
@@ -366,11 +361,10 @@ async def macları_cek():
                                 'ev_corner': ev_corner, 'dep_corner': dep_corner,
                                 'son_gol': son_gol
                             })
-                        except Exception as e:
-                            logger.error(f"Maç parse: {e}")
+                        except:
                             continue
                 elif resp.status == 429:
-                    logger.warning("⚠️ API limit! Bekleniyor...")
+                    logger.warning("⚠️ API limit!")
                 else:
                     logger.error(f"API hata: {resp.status}")
     except Exception as e:
@@ -438,7 +432,23 @@ async def ana_dongu():
     try:
         await bot.send_message(
             chat_id=CHAT_ID,
-            text=f"🤖 *MAÇ ANALİZ BOTU AKTİF*\n\n✅ API-Football bağlandı\n✅ Veritabanı bağlandı\n📡 Her 6 dakikada kontrol\n😴 Uyku modu: 23:00 - 15:00\n🎯 Minimum sinyal: {MIN_PUAN}/12\n📊 Sonuç + Rapor takibi aktif\n\n_Güçlü sinyal bulunca otomatik bildirim gelecek!_",
+            text=f"""🤖 *MAÇ ANALİZ BOTU AKTİF*
+
+✅ API-Football bağlandı
+✅ Veritabanı bağlandı
+🎯 Minimum sinyal: {MIN_PUAN}/12
+
+⏰ *Zamanlama:*
+😴 00:00 - 11:30 → Uyku
+⚽ 11:30 - 15:00 → 8 dk kontrol
+🔥 15:00 - 19:00 → 7 dk kontrol
+🔥 19:00 - 23:00 → 6 dk kontrol
+😴 23:00 - 00:00 → Uyku
+
+📊 Sonuç takibi aktif
+📈 Haftalık + Aylık rapor aktif
+
+_Güçlü sinyal bulunca otomatik bildirim gelecek!_""",
             parse_mode=ParseMode.MARKDOWN
         )
         logger.info("Bot başladı!")
@@ -454,38 +464,43 @@ async def ana_dongu():
             simdi = datetime.now()
             bugun = simdi.date()
 
-            # Haftalık rapor — her Pazartesi 09:00
+            # Haftalık rapor — Pazartesi 09:00
             if simdi.weekday() == 0 and simdi.hour == 9 and son_haftalik != bugun:
                 await haftalik_rapor_gonder(bot)
                 son_haftalik = bugun
 
-            # Aylık rapor — her ayın 1'i 09:00
+            # Aylık rapor — Ayın 1'i 09:00
             if simdi.day == 1 and simdi.hour == 9 and son_aylik != bugun:
                 await aylik_rapor_gonder(bot)
                 son_aylik = bugun
 
-            # Uyku modu kontrolü
-            if not aktif_mi():
+            # Kontrol süresini al
+            sure, mod = kontrol_suresi_al()
+
+            # Uyku modu
+            if sure is None:
                 if not uyku_bildirimi:
                     await bot.send_message(
                         chat_id=CHAT_ID,
-                        text="😴 *UYKU MODU AKTİF*\n\n🕐 15:00'de uyanacağım!\n_API kotası korunuyor..._",
+                        text="😴 *UYKU MODU AKTİF*\n\n🕐 11:30'da uyanacağım!\n_API kotası korunuyor..._",
                         parse_mode=ParseMode.MARKDOWN
                     )
                     uyku_bildirimi = True
                     logger.info("Uyku moduna geçildi")
-                await asyncio.sleep(1800)  # 30 dakikada bir kontrol
+                await asyncio.sleep(1800)
                 continue
             else:
                 if uyku_bildirimi:
+                    mod_emoji = "⚽" if mod == "öğle" else "🔥"
                     await bot.send_message(
                         chat_id=CHAT_ID,
-                        text="⚡ *UYANDIM! Maç takibi başlıyor...*\n\n🔍 Canlı maçlar taranıyor!",
+                        text=f"{mod_emoji} *UYANDIM!*\n\n🔍 Maç takibi başlıyor...\n⏱ Kontrol süresi: {sure//60} dakika",
                         parse_mode=ParseMode.MARKDOWN
                     )
                     uyku_bildirimi = False
+                    logger.info(f"Uyku modundan çıkıldı — mod: {mod}")
 
-            # Maçları çek
+            # Maçları çek ve analiz et
             maclar = await macları_cek()
             aktif_idler = [m['id'] for m in maclar]
 
@@ -513,7 +528,6 @@ async def ana_dongu():
                 puan, sinyaller = sinyal_hesapla(mac)
                 mac_id = mac['id']
 
-                # Takip listesini güncelle
                 if mac_id in bildirim_gonderilen:
                     biten_maclar[mac_id] = {
                         'ev': mac['ev'],
@@ -541,7 +555,7 @@ async def ana_dongu():
         except Exception as e:
             logger.error(f"Ana döngü hatası: {e}")
 
-        await asyncio.sleep(KONTROL_SURESI)
+        await asyncio.sleep(sure or 1800)
 
 
 if __name__ == "__main__":
