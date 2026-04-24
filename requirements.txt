@@ -1,3 +1,3 @@
-python-telegram-bot
-aiohttp
-asyncpg
+python-telegram-bot==20.7
+aiohttp==3.9.5
+asyncpg==0.29.0
