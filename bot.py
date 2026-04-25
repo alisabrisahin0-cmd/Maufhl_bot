@@ -27,11 +27,11 @@ def kontrol_suresi_al():
     if saat < 11 or (saat == 11 and dk < 30):
         return None
     elif (saat == 11 and dk >= 30) or (12 <= saat < 15):
-        return 480   # 8 dakika
+        return 480
     elif 15 <= saat < 19:
-        return 420   # 7 dakika
+        return 420
     elif 19 <= saat < 23:
-        return 360   # 6 dakika
+        return 360
     else:
         return None
 
@@ -101,15 +101,15 @@ async def haftalik_rapor(bot):
         kazanan = len([r for r in rows if r['sonuc'] == 'TUTTU'])
         kaybeden = toplam - kazanan
         oran = round(kazanan / toplam * 100, 1)
-        mesaj = f"""📊 *HAFTALIK RAPOR*
-━━━━━━━━━━━━
-📅 Son 7 Gün
-📈 Toplam: {toplam}
-✅ Kazanan: {kazanan}
-❌ Kaybeden: {kaybeden}
-🎯 Başarı: *%{oran}*
-━━━━━━━━━━━━"""
-        await bot.send_message(chat_id=CHAT_ID, text=mesaj, parse_mode=ParseMode.MARKDOWN)
+        mesaj = (
+            "HAFTALIK RAPOR\n"
+            "Son 7 Gun\n\n"
+            f"Toplam: {toplam}\n"
+            f"Kazanan: {kazanan}\n"
+            f"Kaybeden: {kaybeden}\n"
+            f"Basari: %{oran}"
+        )
+        await bot.send_message(chat_id=CHAT_ID, text=mesaj)
     except Exception as e:
         logger.error(f"Haftalik rapor hatasi: {e}")
 
@@ -127,15 +127,15 @@ async def aylik_rapor(bot):
         kazanan = len([r for r in rows if r['sonuc'] == 'TUTTU'])
         kaybeden = toplam - kazanan
         oran = round(kazanan / toplam * 100, 1)
-        mesaj = f"""📊 *AYLIK RAPOR*
-━━━━━━━━━━━━
-📅 Son 30 Gün
-📈 Toplam: {toplam}
-✅ Kazanan: {kazanan}
-❌ Kaybeden: {kaybeden}
-🎯 Başarı: *%{oran}*
-━━━━━━━━━━━━"""
-        await bot.send_message(chat_id=CHAT_ID, text=mesaj, parse_mode=ParseMode.MARKDOWN)
+        mesaj = (
+            "AYLIK RAPOR\n"
+            "Son 30 Gun\n\n"
+            f"Toplam: {toplam}\n"
+            f"Kazanan: {kazanan}\n"
+            f"Kaybeden: {kaybeden}\n"
+            f"Basari: %{oran}"
+        )
+        await bot.send_message(chat_id=CHAT_ID, text=mesaj)
     except Exception as e:
         logger.error(f"Aylik rapor hatasi: {e}")
 
@@ -157,34 +157,34 @@ def sinyal_hesapla(mac):
 
     if kg_var:
         puan += 1
-        aktif.append("✅ KG VAR")
+        aktif.append("KG VAR")
     if gol_fark >= 2:
         puan += 1
-        aktif.append(f"✅ Gol Farki {gol_fark}")
+        aktif.append(f"Gol Farki {gol_fark}")
     if toplam_gol >= 3:
         puan += 1
-        aktif.append(f"✅ Toplam Gol {toplam_gol}")
+        aktif.append(f"Toplam Gol {toplam_gol}")
     if toplam_gol >= 4:
         puan += 1
-        aktif.append(f"🔥 {toplam_gol} Gol!")
+        aktif.append(f"{toplam_gol} Gol!")
     if gol_hizi >= 0.10:
         puan += 1
-        aktif.append(f"✅ Gol Hizi {gol_hizi}/dk")
+        aktif.append(f"Gol Hizi {gol_hizi}/dk")
     if gol_hizi >= 0.15:
         puan += 1
-        aktif.append(f"🔥 Yuksek Hiz {gol_hizi}/dk")
+        aktif.append(f"Yuksek Hiz {gol_hizi}/dk")
     if son_gol >= 70:
         puan += 1
-        aktif.append(f"✅ Son Gol {son_gol}. dk")
+        aktif.append(f"Son Gol {son_gol}dk")
     if corner_fark >= 5:
         puan += 1
-        aktif.append(f"✅ Corner {ev_corner}-{dep_corner}")
+        aktif.append(f"Corner {ev_corner}-{dep_corner}")
     if dakika <= 30 and toplam_gol >= 2:
         puan += 1
-        aktif.append(f"✅ Erken+Gol ({dakika}dk)")
+        aktif.append(f"Erken+Gol ({dakika}dk)")
     if gol_fark >= 3 and dakika <= 30:
         puan += 1
-        aktif.append(f"🔥 Buyuk Fark Erken!")
+        aktif.append("Buyuk Fark Erken!")
     return puan, aktif
 
 
@@ -275,52 +275,55 @@ async def macları_cek():
                 else:
                     logger.error(f"API hata: {resp.status}")
     except Exception as e:
-        logger.error(f"API baglanti hatasi: {e}")
+        logger.error(f"API hatasi: {e}")
     return maclar
 
 
 async def bildirim_gonder(bot, mac, puan, sinyaller, tahmin):
     if puan >= 9:
-        karar = "🔥 KESİN GİR"
+        karar = "KESIN GIR"
         emoji = "🔥"
     elif puan >= 7:
-        karar = "✅ GİREBİLİRSİN"
+        karar = "GIREBILIRSiN"
         emoji = "✅"
     else:
-        karar = "⚠️ DİKKATLİ OL"
+        karar = "DIKKATLI OL"
         emoji = "⚠️"
+
     bar = "█" * puan + "░" * (12 - puan)
-    mesaj = f"""{emoji} *{mac['ev']} {mac['ev_gol']}–{mac['dep_gol']} {mac['dep']}*
-🏆 {mac['lig']}
-⏱ *{mac['dakika']}. Dakika*
-
-📊 *Sinyal: {puan}/12*
-`{bar}`
-
-*Aktif Sinyaller:*
-{chr(10).join(sinyaller)}
-
-━━━━━━━━━━━━
-{karar}
-💡 *{tahmin}*
-━━━━━━━━━━━━
-_Veri bazli analiz — risk mevcuttur_"""
+    sinyal_metni = "\n".join(sinyaller)
+    mesaj = (
+        f"{emoji} {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']}\n"
+        f"🏆 {mac['lig']}\n"
+        f"⏱ {mac['dakika']}. Dakika\n\n"
+        f"📊 Sinyal: {puan}/12\n"
+        f"{bar}\n\n"
+        f"Aktif Sinyaller:\n{sinyal_metni}\n\n"
+        f"{'='*20}\n"
+        f"{karar}\n"
+        f"Tahmin: {tahmin}\n"
+        f"{'='*20}\n"
+        f"Veri bazli analiz - risk mevcuttur"
+    )
     try:
-        await bot.send_message(chat_id=CHAT_ID, text=mesaj, parse_mode=ParseMode.MARKDOWN)
+        await bot.send_message(chat_id=CHAT_ID, text=mesaj)
         await sinyal_kaydet(mac, puan, tahmin)
-        logger.info(f"Bildirim: {mac['ev']} vs {mac['dep']} — {puan} puan")
+        logger.info(f"Bildirim gonderildi: {mac['ev']} vs {mac['dep']} - {puan} puan")
     except Exception as e:
         logger.error(f"Bildirim hatasi: {e}")
 
 
 async def sonuc_bildir(bot, mac_id, ev, dep, tahmin, sonuc, fin_ev, fin_dep):
-    emoji = "✅ TUTTU!" if sonuc == "TUTTU" else "❌ DÜŞTÜ!"
-    mesaj = f"""📊 *SONUÇ: {ev} {fin_ev}–{fin_dep} {dep}*
-{emoji}
-💡 Tahmin: *{tahmin}*"""
+    emoji = "✅ TUTTU!" if sonuc == "TUTTU" else "❌ DUSTU!"
+    mesaj = (
+        f"SONUC: {ev} {fin_ev}-{fin_dep} {dep}\n"
+        f"{emoji}\n"
+        f"Tahmin: {tahmin}"
+    )
     try:
-        await bot.send_message(chat_id=CHAT_ID, text=mesaj, parse_mode=ParseMode.MARKDOWN)
+        await bot.send_message(chat_id=CHAT_ID, text=mesaj)
         await sonuc_guncelle(mac_id, sonuc, fin_ev, fin_dep)
+        logger.info(f"Sonuc bildirimi: {ev} vs {dep} - {sonuc}")
     except Exception as e:
         logger.error(f"Sonuc hatasi: {e}")
 
@@ -328,25 +331,22 @@ async def sonuc_bildir(bot, mac_id, ev, dep, tahmin, sonuc, fin_ev, fin_dep):
 async def ana_dongu():
     bot = Bot(token=TELEGRAM_TOKEN)
     await db_baglant()
+
     try:
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text="""🤖 *MAÇ ANALİZ BOTU AKTİF*
-
-✅ API\-Football baglandi
-✅ Veritabani baglandi
-🎯 Min sinyal: 7/12
-
-⏰ *Zamanlama:*
-😴 00:00 \- 11:30 → Uyku
-⚽ 11:30 \- 15:00 → 8 dk
-🔥 15:00 \- 19:00 → 7 dk
-🔥 19:00 \- 23:00 → 6 dk
-😴 23:00 \- 00:00 → Uyku
-
-📊 Sonuc \+ Rapor takibi aktif""",
-            parse_mode=ParseMode.MARKDOWN
+        mesaj = (
+            "🤖 MAC ANALIZ BOTU AKTIF\n\n"
+            "✅ API-Football baglandi\n"
+            "✅ Veritabani baglandi\n"
+            f"🎯 Min sinyal: {MIN_PUAN}/12\n\n"
+            "⏰ Zamanlama:\n"
+            "😴 00:00 - 11:30 Uyku\n"
+            "⚽ 11:30 - 15:00 (8 dk)\n"
+            "🔥 15:00 - 19:00 (7 dk)\n"
+            "🔥 19:00 - 23:00 (6 dk)\n"
+            "😴 23:00 - 00:00 Uyku\n\n"
+            "Guclu sinyal bulunca bildirim gelecek!"
         )
+        await bot.send_message(chat_id=CHAT_ID, text=mesaj)
         logger.info("Bot basladi!")
     except Exception as e:
         logger.error(f"Baslangic hatasi: {e}")
@@ -374,8 +374,7 @@ async def ana_dongu():
                 if not uyku_bildirimi:
                     await bot.send_message(
                         chat_id=CHAT_ID,
-                        text="😴 *UYKU MODU*\n\n🕐 11:30'da uyanacagim!\n_API kotasi korunuyor_",
-                        parse_mode=ParseMode.MARKDOWN
+                        text="😴 UYKU MODU\n11:30'da uyanacagim!\nAPI kotasi korunuyor."
                     )
                     uyku_bildirimi = True
                     logger.info("Uyku moduna gecildi")
@@ -385,10 +384,10 @@ async def ana_dongu():
                 if uyku_bildirimi:
                     await bot.send_message(
                         chat_id=CHAT_ID,
-                        text=f"⚡ *UYANDIM!*\n🔍 Mac takibi basliyor\n⏱ Kontrol: {sure//60} dakika",
-                        parse_mode=ParseMode.MARKDOWN
+                        text=f"⚡ UYANDIM!\nMac takibi basliyor...\nKontrol: {sure//60} dakika"
                     )
                     uyku_bildirimi = False
+                    logger.info("Uyku modundan cikild")
 
             maclar = await macları_cek()
             aktif_idler = [m['id'] for m in maclar]
@@ -441,4 +440,5 @@ async def ana_dongu():
 
 
 if __name__ == "__main__":
+    logger.info("BOT STARTED")
     asyncio.run(ana_dongu())
