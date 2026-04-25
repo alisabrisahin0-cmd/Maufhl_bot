@@ -5,11 +5,13 @@ import logging
 import os
 import asyncpg
 from datetime import datetime, timedelta
+import json
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID = os.getenv("CHAT_ID", "")
 APISPORTS_KEY = os.getenv("APISPORTS_KEY", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+GEMINI_KEY = os.getenv("GEMINI_KEY", "")
 MIN_PUAN = int(os.getenv("MIN_PUAN", "7"))
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -51,6 +53,8 @@ async def db_baglant():
                 dep_gol INTEGER,
                 puan INTEGER,
                 tahmin TEXT,
+                ai_yorum TEXT,
+                kasa_yuzde REAL,
                 bildirim_zamani TIMESTAMP DEFAULT NOW(),
                 sonuc TEXT DEFAULT 'BEKLIYOR',
                 final_ev_gol INTEGER DEFAULT 0,
@@ -62,15 +66,16 @@ async def db_baglant():
         logger.error(f"DB hatasi: {e}")
 
 
-async def sinyal_kaydet(mac, puan, tahmin):
+async def sinyal_kaydet(mac, puan, tahmin, ai_yorum, kasa_yuzde):
     try:
         if db_pool:
             await db_pool.execute("""
                 INSERT INTO sinyaller
-                (mac_id, ev, dep, lig, dakika, ev_gol, dep_gol, puan, tahmin)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                (mac_id, ev, dep, lig, dakika, ev_gol, dep_gol, puan, tahmin, ai_yorum, kasa_yuzde)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
             """, mac['id'], mac['ev'], mac['dep'], mac['lig'],
-                mac['dakika'], mac['ev_gol'], mac['dep_gol'], puan, tahmin)
+                mac['dakika'], mac['ev_gol'], mac['dep_gol'],
+                puan, tahmin, ai_yorum, kasa_yuzde)
     except Exception as e:
         logger.error(f"Kayit hatasi: {e}")
 
@@ -85,6 +90,62 @@ async def sonuc_guncelle(mac_id, sonuc, final_ev, final_dep):
             """, sonuc, final_ev, final_dep, mac_id)
     except Exception as e:
         logger.error(f"Guncelleme hatasi: {e}")
+
+
+async def gemini_analiz(mac, puan, tahmin):
+    """Gemini AI ile eleştirel analiz yap"""
+    if not GEMINI_KEY:
+        return "AI analiz aktif degil.", 1.5
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+
+    prompt = f"""Sen profesyonel bir canlı bahis analistsin. Aşağıdaki maçı eleştirel gözle değerlendir:
+
+MAÇ BİLGİLERİ:
+- Maç: {mac['ev']} vs {mac['dep']}
+- Lig: {mac['lig']}
+- Dakika: {mac['dakika']}
+- Skor: {mac['ev_gol']}-{mac['dep_gol']}
+- Corner: {mac['ev_corner']}-{mac['dep_corner']}
+- Son gol dakikası: {mac['son_gol']}
+- İstatistik puanı: {puan}/12
+- Önerilen tahmin: {tahmin}
+
+GÖREVIN:
+1. Bu maçı 2-3 cümle ile eleştirel analiz et. Sadece istatistiklere değil, mantıksal çıkarıma da bak.
+2. Riski değerlendir: DUSUK, ORTA veya YUKSEK
+3. Kasa önerisi: puan 9-12 ve risk DUSUK ise %4, puan 7-8 ve risk DUSUK/ORTA ise %1.5, risk YUKSEK ise %0 (girme)
+
+CEVAP FORMATI (sadece JSON):
+{{"yorum": "kısa analiz", "risk": "DUSUK/ORTA/YUKSEK", "kasa_yuzde": 0.0, "girilmeli": true/false}}"""
+
+    try:
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300}
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    text = data['candidates'][0]['content']['parts'][0]['text']
+                    # JSON parse
+                    text = text.strip()
+                    if "```" in text:
+                        text = text.split("```")[1].replace("json", "").strip()
+                    result = json.loads(text)
+                    yorum = result.get('yorum', 'Analiz yapılamadı')
+                    kasa = float(result.get('kasa_yuzde', 1.5))
+                    girilmeli = result.get('girilmeli', True)
+                    if not girilmeli:
+                        kasa = 0.0
+                    return yorum, kasa
+                else:
+                    logger.error(f"Gemini hata: {resp.status}")
+                    return "AI analiz yapılamadı.", 1.5
+    except Exception as e:
+        logger.error(f"Gemini hatasi: {e}")
+        return "AI analiz yapılamadı.", 1.5
 
 
 async def haftalik_rapor(bot):
@@ -209,7 +270,6 @@ def sonuc_kontrol(tahmin, bas_ev, bas_dep, fin_ev, fin_dep):
 
 
 async def macları_cek():
-    # api-sports.io direkt endpoint
     url = "https://v3.football.api-sports.io/fixtures?live=all"
     headers = {
         "x-apisports-key": APISPORTS_KEY,
@@ -221,38 +281,29 @@ async def macları_cek():
             async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    
-                    # Hata kontrolu
                     errors = data.get('errors', {})
                     if errors:
                         logger.error(f"API errors: {errors}")
                         return maclar
-
                     fixtures = data.get('response', [])
                     logger.info(f"{len(fixtures)} canli mac bulundu")
-
                     for f in fixtures:
                         try:
                             fixture = f.get('fixture', {})
                             teams = f.get('teams', {})
                             goals = f.get('goals', {})
                             league = f.get('league', {})
-
                             mac_id = str(fixture.get('id', ''))
                             ev = teams.get('home', {}).get('name', '?')
                             dep = teams.get('away', {}).get('name', '?')
                             lig = league.get('name', '?')
                             dakika = int(fixture.get('status', {}).get('elapsed', 0) or 0)
-
                             if dakika < 5 or dakika > 85:
                                 continue
-
                             ev_gol = int(goals.get('home', 0) or 0)
                             dep_gol = int(goals.get('away', 0) or 0)
-
                             ev_corner = dep_corner = son_gol = 0
                             home_id = teams.get('home', {}).get('id')
-
                             for stat in f.get('statistics', []):
                                 if 'corner' in stat.get('type', '').lower():
                                     val = int(stat.get('value', 0) or 0)
@@ -260,13 +311,11 @@ async def macları_cek():
                                         ev_corner = val
                                     else:
                                         dep_corner = val
-
                             for event in f.get('events', []):
                                 if event.get('type') == 'Goal':
                                     gdk = int(event.get('time', {}).get('elapsed', 0) or 0)
                                     if gdk > son_gol:
                                         son_gol = gdk
-
                             maclar.append({
                                 'id': mac_id, 'ev': ev, 'dep': dep, 'lig': lig,
                                 'dakika': dakika, 'ev_gol': ev_gol, 'dep_gol': dep_gol,
@@ -277,18 +326,30 @@ async def macları_cek():
                             continue
                 else:
                     logger.error(f"API hata kodu: {resp.status}")
-                    text = await resp.text()
-                    logger.error(f"API yanit: {text[:200]}")
     except Exception as e:
         logger.error(f"API baglanti hatasi: {e}")
     return maclar
 
 
-async def bildirim_gonder(bot, mac, puan, sinyaller, tahmin):
-    if puan >= 9:
+async def bildirim_gonder(bot, mac, puan, sinyaller, tahmin, ai_yorum, kasa_yuzde):
+    # Kasa yönetimi
+    if kasa_yuzde == 0:
+        # AI girme dedi — sadece uyarı gönder
+        mesaj = (
+            f"⚠️ AI UYARISI: {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']}\n"
+            f"Sinyal: {puan}/12 - Yüksek puan ama AI riskli buldu!\n\n"
+            f"🧠 AI Analiz: {ai_yorum}\n\n"
+            f"❌ GIRME - Kasa korunuyor!"
+        )
+        await bot.send_message(chat_id=CHAT_ID, text=mesaj)
+        await sinyal_kaydet(mac, puan, tahmin, ai_yorum, kasa_yuzde)
+        return
+
+    # Karar emojisi
+    if puan >= 9 and kasa_yuzde >= 4:
         karar = "KESIN GIR"
         emoji = "🔥"
-    elif puan >= 7:
+    elif puan >= 7 and kasa_yuzde >= 1.5:
         karar = "GIREBILIRSiN"
         emoji = "✅"
     else:
@@ -297,6 +358,7 @@ async def bildirim_gonder(bot, mac, puan, sinyaller, tahmin):
 
     bar = "█" * puan + "░" * (12 - puan)
     sinyal_metni = "\n".join(sinyaller)
+
     mesaj = (
         f"{emoji} {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']}\n"
         f"Lig: {mac['lig']}\n"
@@ -304,16 +366,19 @@ async def bildirim_gonder(bot, mac, puan, sinyaller, tahmin):
         f"Sinyal: {puan}/12\n"
         f"{bar}\n\n"
         f"Sinyaller:\n{sinyal_metni}\n\n"
+        f"🧠 AI ANALiZ:\n{ai_yorum}\n\n"
+        f"💰 KASA YONETiMi:\n"
+        f"Kasanin %{kasa_yuzde}'ini kullan\n\n"
         f"---\n"
         f"{karar}\n"
         f"Tahmin: {tahmin}\n"
         f"---\n"
-        f"Veri bazli analiz - risk mevcuttur"
+        f"Istatistikler yaniltici olabilir, disiplinli kal!"
     )
     try:
         await bot.send_message(chat_id=CHAT_ID, text=mesaj)
-        await sinyal_kaydet(mac, puan, tahmin)
-        logger.info(f"Bildirim: {mac['ev']} vs {mac['dep']} - {puan} puan")
+        await sinyal_kaydet(mac, puan, tahmin, ai_yorum, kasa_yuzde)
+        logger.info(f"Bildirim: {mac['ev']} vs {mac['dep']} - {puan} puan - %{kasa_yuzde} kasa")
     except Exception as e:
         logger.error(f"Bildirim hatasi: {e}")
 
@@ -344,6 +409,7 @@ async def ana_dongu():
                 "MAC ANALIZ BOTU AKTIF\n\n"
                 "API-Football baglandi\n"
                 "Veritabani baglandi\n"
+                "Gemini AI baglandi\n"
                 f"Min sinyal: {MIN_PUAN}/12\n\n"
                 "Zamanlama:\n"
                 "00:00-11:30 Uyku\n"
@@ -351,6 +417,7 @@ async def ana_dongu():
                 "15:00-19:00 (7 dk)\n"
                 "19:00-23:00 (6 dk)\n"
                 "23:00-00:00 Uyku\n\n"
+                "AI Analiz + Kasa Yonetimi aktif!\n"
                 "Guclu sinyal bulunca bildirim gelecek!"
             )
         )
@@ -394,7 +461,6 @@ async def ana_dongu():
                         text=f"UYANDIM!\nMac takibi basliyor\nKontrol: {sure//60} dakika"
                     )
                     uyku_bildirimi = False
-                    logger.info("Uyku modundan cikild")
 
             maclar = await macları_cek()
             aktif_idler = [m['id'] for m in maclar]
@@ -433,7 +499,9 @@ async def ana_dongu():
                     onceki = bildirim_gonderilen.get(mac_id, {}).get('puan', 0)
                     if puan > onceki:
                         tahmin = tavsiye_uret(mac)
-                        await bildirim_gonder(bot, mac, puan, sinyaller, tahmin)
+                        # Gemini AI analiz
+                        ai_yorum, kasa_yuzde = await gemini_analiz(mac, puan, tahmin)
+                        await bildirim_gonder(bot, mac, puan, sinyaller, tahmin, ai_yorum, kasa_yuzde)
                         bildirim_gonderilen[mac_id] = {
                             'puan': puan, 'tahmin': tahmin,
                             'ev_gol': mac['ev_gol'], 'dep_gol': mac['dep_gol']
