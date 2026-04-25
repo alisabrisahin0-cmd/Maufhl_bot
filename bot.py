@@ -1,7 +1,6 @@
 import asyncio
 import aiohttp
 from telegram import Bot
-from telegram.constants import ParseMode
 import logging
 import os
 import asyncpg
@@ -9,7 +8,7 @@ from datetime import datetime, timedelta
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID = os.getenv("CHAT_ID", "")
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "")
+APISPORTS_KEY = os.getenv("APISPORTS_KEY", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 MIN_PUAN = int(os.getenv("MIN_PUAN", "7"))
 
@@ -101,15 +100,10 @@ async def haftalik_rapor(bot):
         kazanan = len([r for r in rows if r['sonuc'] == 'TUTTU'])
         kaybeden = toplam - kazanan
         oran = round(kazanan / toplam * 100, 1)
-        mesaj = (
-            "HAFTALIK RAPOR\n"
-            "Son 7 Gun\n\n"
-            f"Toplam: {toplam}\n"
-            f"Kazanan: {kazanan}\n"
-            f"Kaybeden: {kaybeden}\n"
-            f"Basari: %{oran}"
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=f"HAFTALIK RAPOR\nSon 7 Gun\n\nToplam: {toplam}\nKazanan: {kazanan}\nKaybeden: {kaybeden}\nBasari: %{oran}"
         )
-        await bot.send_message(chat_id=CHAT_ID, text=mesaj)
     except Exception as e:
         logger.error(f"Haftalik rapor hatasi: {e}")
 
@@ -127,15 +121,10 @@ async def aylik_rapor(bot):
         kazanan = len([r for r in rows if r['sonuc'] == 'TUTTU'])
         kaybeden = toplam - kazanan
         oran = round(kazanan / toplam * 100, 1)
-        mesaj = (
-            "AYLIK RAPOR\n"
-            "Son 30 Gun\n\n"
-            f"Toplam: {toplam}\n"
-            f"Kazanan: {kazanan}\n"
-            f"Kaybeden: {kaybeden}\n"
-            f"Basari: %{oran}"
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=f"AYLIK RAPOR\nSon 30 Gun\n\nToplam: {toplam}\nKazanan: {kazanan}\nKaybeden: {kaybeden}\nBasari: %{oran}"
         )
-        await bot.send_message(chat_id=CHAT_ID, text=mesaj)
     except Exception as e:
         logger.error(f"Aylik rapor hatasi: {e}")
 
@@ -220,10 +209,11 @@ def sonuc_kontrol(tahmin, bas_ev, bas_dep, fin_ev, fin_dep):
 
 
 async def macları_cek():
-    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures?live=all"
+    # api-sports.io direkt endpoint
+    url = "https://v3.football.api-sports.io/fixtures?live=all"
     headers = {
-        "x-rapidapi-host": "api-football-v1.p.rapidapi.com",
-        "x-rapidapi-key": RAPIDAPI_KEY
+        "x-apisports-key": APISPORTS_KEY,
+        "x-apisports-host": "v3.football.api-sports.io"
     }
     maclar = []
     try:
@@ -231,25 +221,38 @@ async def macları_cek():
             async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
+                    
+                    # Hata kontrolu
+                    errors = data.get('errors', {})
+                    if errors:
+                        logger.error(f"API errors: {errors}")
+                        return maclar
+
                     fixtures = data.get('response', [])
                     logger.info(f"{len(fixtures)} canli mac bulundu")
+
                     for f in fixtures:
                         try:
                             fixture = f.get('fixture', {})
                             teams = f.get('teams', {})
                             goals = f.get('goals', {})
                             league = f.get('league', {})
+
                             mac_id = str(fixture.get('id', ''))
                             ev = teams.get('home', {}).get('name', '?')
                             dep = teams.get('away', {}).get('name', '?')
                             lig = league.get('name', '?')
                             dakika = int(fixture.get('status', {}).get('elapsed', 0) or 0)
+
                             if dakika < 5 or dakika > 85:
                                 continue
+
                             ev_gol = int(goals.get('home', 0) or 0)
                             dep_gol = int(goals.get('away', 0) or 0)
+
                             ev_corner = dep_corner = son_gol = 0
                             home_id = teams.get('home', {}).get('id')
+
                             for stat in f.get('statistics', []):
                                 if 'corner' in stat.get('type', '').lower():
                                     val = int(stat.get('value', 0) or 0)
@@ -257,11 +260,13 @@ async def macları_cek():
                                         ev_corner = val
                                     else:
                                         dep_corner = val
+
                             for event in f.get('events', []):
                                 if event.get('type') == 'Goal':
                                     gdk = int(event.get('time', {}).get('elapsed', 0) or 0)
                                     if gdk > son_gol:
                                         son_gol = gdk
+
                             maclar.append({
                                 'id': mac_id, 'ev': ev, 'dep': dep, 'lig': lig,
                                 'dakika': dakika, 'ev_gol': ev_gol, 'dep_gol': dep_gol,
@@ -270,12 +275,12 @@ async def macları_cek():
                             })
                         except:
                             continue
-                elif resp.status == 429:
-                    logger.warning("API limit!")
                 else:
-                    logger.error(f"API hata: {resp.status}")
+                    logger.error(f"API hata kodu: {resp.status}")
+                    text = await resp.text()
+                    logger.error(f"API yanit: {text[:200]}")
     except Exception as e:
-        logger.error(f"API hatasi: {e}")
+        logger.error(f"API baglanti hatasi: {e}")
     return maclar
 
 
@@ -294,27 +299,27 @@ async def bildirim_gonder(bot, mac, puan, sinyaller, tahmin):
     sinyal_metni = "\n".join(sinyaller)
     mesaj = (
         f"{emoji} {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']}\n"
-        f"🏆 {mac['lig']}\n"
-        f"⏱ {mac['dakika']}. Dakika\n\n"
-        f"📊 Sinyal: {puan}/12\n"
+        f"Lig: {mac['lig']}\n"
+        f"Dakika: {mac['dakika']}\n\n"
+        f"Sinyal: {puan}/12\n"
         f"{bar}\n\n"
-        f"Aktif Sinyaller:\n{sinyal_metni}\n\n"
-        f"{'='*20}\n"
+        f"Sinyaller:\n{sinyal_metni}\n\n"
+        f"---\n"
         f"{karar}\n"
         f"Tahmin: {tahmin}\n"
-        f"{'='*20}\n"
+        f"---\n"
         f"Veri bazli analiz - risk mevcuttur"
     )
     try:
         await bot.send_message(chat_id=CHAT_ID, text=mesaj)
         await sinyal_kaydet(mac, puan, tahmin)
-        logger.info(f"Bildirim gonderildi: {mac['ev']} vs {mac['dep']} - {puan} puan")
+        logger.info(f"Bildirim: {mac['ev']} vs {mac['dep']} - {puan} puan")
     except Exception as e:
         logger.error(f"Bildirim hatasi: {e}")
 
 
 async def sonuc_bildir(bot, mac_id, ev, dep, tahmin, sonuc, fin_ev, fin_dep):
-    emoji = "✅ TUTTU!" if sonuc == "TUTTU" else "❌ DUSTU!"
+    emoji = "TUTTU!" if sonuc == "TUTTU" else "DUSTU!"
     mesaj = (
         f"SONUC: {ev} {fin_ev}-{fin_dep} {dep}\n"
         f"{emoji}\n"
@@ -323,7 +328,7 @@ async def sonuc_bildir(bot, mac_id, ev, dep, tahmin, sonuc, fin_ev, fin_dep):
     try:
         await bot.send_message(chat_id=CHAT_ID, text=mesaj)
         await sonuc_guncelle(mac_id, sonuc, fin_ev, fin_dep)
-        logger.info(f"Sonuc bildirimi: {ev} vs {dep} - {sonuc}")
+        logger.info(f"Sonuc: {ev} vs {dep} - {sonuc}")
     except Exception as e:
         logger.error(f"Sonuc hatasi: {e}")
 
@@ -333,20 +338,22 @@ async def ana_dongu():
     await db_baglant()
 
     try:
-        mesaj = (
-            "🤖 MAC ANALIZ BOTU AKTIF\n\n"
-            "✅ API-Football baglandi\n"
-            "✅ Veritabani baglandi\n"
-            f"🎯 Min sinyal: {MIN_PUAN}/12\n\n"
-            "⏰ Zamanlama:\n"
-            "😴 00:00 - 11:30 Uyku\n"
-            "⚽ 11:30 - 15:00 (8 dk)\n"
-            "🔥 15:00 - 19:00 (7 dk)\n"
-            "🔥 19:00 - 23:00 (6 dk)\n"
-            "😴 23:00 - 00:00 Uyku\n\n"
-            "Guclu sinyal bulunca bildirim gelecek!"
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=(
+                "MAC ANALIZ BOTU AKTIF\n\n"
+                "API-Football baglandi\n"
+                "Veritabani baglandi\n"
+                f"Min sinyal: {MIN_PUAN}/12\n\n"
+                "Zamanlama:\n"
+                "00:00-11:30 Uyku\n"
+                "11:30-15:00 (8 dk)\n"
+                "15:00-19:00 (7 dk)\n"
+                "19:00-23:00 (6 dk)\n"
+                "23:00-00:00 Uyku\n\n"
+                "Guclu sinyal bulunca bildirim gelecek!"
+            )
         )
-        await bot.send_message(chat_id=CHAT_ID, text=mesaj)
         logger.info("Bot basladi!")
     except Exception as e:
         logger.error(f"Baslangic hatasi: {e}")
@@ -374,7 +381,7 @@ async def ana_dongu():
                 if not uyku_bildirimi:
                     await bot.send_message(
                         chat_id=CHAT_ID,
-                        text="😴 UYKU MODU\n11:30'da uyanacagim!\nAPI kotasi korunuyor."
+                        text="UYKU MODU\n11:30'da uyanacagim!\nAPI kotasi korunuyor."
                     )
                     uyku_bildirimi = True
                     logger.info("Uyku moduna gecildi")
@@ -384,7 +391,7 @@ async def ana_dongu():
                 if uyku_bildirimi:
                     await bot.send_message(
                         chat_id=CHAT_ID,
-                        text=f"⚡ UYANDIM!\nMac takibi basliyor...\nKontrol: {sure//60} dakika"
+                        text=f"UYANDIM!\nMac takibi basliyor\nKontrol: {sure//60} dakika"
                     )
                     uyku_bildirimi = False
                     logger.info("Uyku modundan cikild")
