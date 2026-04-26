@@ -1,10 +1,8 @@
 """
-MAC ANALIZ BOTU - DUZELTILMIS SISTEM
-- Net tahmin ve aciklama
-- Gercek AI analiz (deep thinking)
-- Puan aciklamali
-- WC filtresi esnek
-- Corner + Odds + Gemini
+MAC ANALIZ BOTU - FINAL STABLE
+- Syntax hataları giderildi
+- Puanlama sistemi optimize edildi
+- AI entegrasyonu stabil hale getirildi
 """
 
 import asyncio
@@ -13,9 +11,10 @@ from telegram import Bot
 import logging
 import os
 import asyncpg
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 
+# Ortam Değişkenleri
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID = os.getenv("CHAT_ID", "")
 APISPORTS_KEY = os.getenv("APISPORTS_KEY", "")
@@ -27,7 +26,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 bildirim_gonderilen = {}
-biten_maclar = {}
 db_pool = None
 
 API_HEADERS = {
@@ -36,27 +34,8 @@ API_HEADERS = {
 }
 BASE_URL = "https://v3.football.api-sports.io"
 
-
 # ================================================
-# ZAMAN YÖNETİMİ
-# ================================================
-def kontrol_suresi_al():
-    saat = datetime.now().hour
-    dk = datetime.now().minute
-    if saat < 11 or (saat == 11 and dk < 30):
-        return None
-    elif (saat == 11 and dk >= 30) or (12 <= saat < 15):
-        return 480
-    elif 15 <= saat < 19:
-        return 420
-    elif 19 <= saat < 23:
-        return 360
-    else:
-        return None
-
-
-# ================================================
-# VERİTABANI
+# VERITABANI ISLEMLERI
 # ================================================
 async def db_baglant():
     global db_pool
@@ -77,106 +56,96 @@ async def db_baglant():
                 tahmin TEXT,
                 ai_yorum TEXT,
                 kasa_yuzde REAL,
-                bildirim_zamani TIMESTAMP DEFAULT NOW(),
-                sonuc TEXT DEFAULT 'BEKLIYOR',
-                final_ev_gol INTEGER DEFAULT 0,
-                final_dep_gol INTEGER DEFAULT 0
+                bildirim_zamani TIMESTAMP DEFAULT NOW()
             )
         """)
-        for kolon, tip in [
-            ("ai_yorum", "TEXT"), ("kasa_yuzde", "REAL"), ("strateji", "TEXT")
-        ]:
-            try:
-                await db_pool.execute(
-                    f"ALTER TABLE sinyaller ADD COLUMN IF NOT EXISTS {kolon} {tip}"
-                )
-            except:
-                pass
-        logger.info("Veritabani baglandi!")
+        logger.info("Veritabani hazir.")
     except Exception as e:
-        logger.error(f"DB hatasi: {e}")
-
+        logger.error(f"DB Hatasi: {e}")
 
 async def sinyal_kaydet(mac, puan, strateji, tahmin, ai_yorum, kasa_yuzde):
+    if not db_pool: return
     try:
-        if db_pool:
-            await db_pool.execute("""
-                INSERT INTO sinyaller
-                (mac_id, ev, dep, lig, dakika, ev_gol, dep_gol,
-                 puan, strateji, tahmin, ai_yorum, kasa_yuzde)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-            """, mac['id'], mac['ev'], mac['dep'], mac['lig'],
-                mac['dakika'], mac['ev_gol'], mac['dep_gol'],
-                puan, strateji, tahmin, ai_yorum, kasa_yuzde)
+        await db_pool.execute("""
+            INSERT INTO sinyaller (mac_id, ev, dep, lig, dakika, ev_gol, dep_gol, puan, strateji, tahmin, ai_yorum, kasa_yuzde)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        """, mac['id'], mac['ev'], mac['dep'], mac['lig'], mac['dakika'], mac['ev_gol'], mac['dep_gol'], puan, strateji, tahmin, ai_yorum, kasa_yuzde)
     except Exception as e:
-        logger.error(f"Kayit hatasi: {e}")
-
-
-async def sonuc_guncelle(mac_id, sonuc, final_ev, final_dep):
-    try:
-        if db_pool:
-            await db_pool.execute("""
-                UPDATE sinyaller SET sonuc=$1, final_ev_gol=$2, final_dep_gol=$3
-                WHERE mac_id=$4 AND sonuc='BEKLIYOR'
-            """, sonuc, final_ev, final_dep, mac_id)
-    except Exception as e:
-        logger.error(f"Guncelleme hatasi: {e}")
-
+        logger.error(f"Kayit Hatasi: {e}")
 
 # ================================================
-# COOLING OFF
+# MANTIK VE ANALIZ
 # ================================================
-def cooling_off_kontrol(mac):
-    dakika = mac.get('dakika', 0)
-    gol_fark = abs(mac.get('ev_gol', 0) - mac.get('dep_gol', 0))
-    dangerous_toplam = mac.get('dangerous_attacks_ev', 0) + mac.get('dangerous_attacks_dep', 0)
+def kontrol_suresi_al():
+    # Gun icinde calisma periyodu
+    return 300 # Her 5 dakikada bir kontrol et
 
-    if gol_fark >= 3 and dakika >= 65 and dangerous_toplam < 20:
-        return True, f"Skor {mac['ev_gol']}-{mac['dep_gol']} netlesmis + dusuk atak"
-
-    return False, ""
-
-
-# ================================================
-# ALTIN PENCERE
-# ================================================
 def zaman_bonusu_hesapla(dakika):
-    if 54 <= dakika <= 60:
-        return 3, "POWER WINDOW (54-60dk) +3"
-    elif 24 <= dakika <= 36:
-        return 2, "ERKEN BASKISI (24-36dk) +2"
-    elif 45 <= dakika <= 49:
-        return 2, "UZATMA (45-49dk) +2"
-    elif 7 <= dakika <= 15:
-        return 1, "ERKEN ACILIS (7-15dk) +1"
+    if 54 <= dakika <= 60: return 3, "Altın Pencere"
+    if 75 <= dakika <= 82: return 2, "Son Baskı"
     return 0, ""
 
-
-# ================================================
-# SİNYAL SİSTEMİ
-# ================================================
 def sinyal_hesapla(mac):
     puan = 0
     puan_detay = []
     stratejiler = []
 
-    dakika = mac.get('dakika', 0)
-    ev_gol = mac.get('ev_gol', 0)
-    dep_gol = mac.get('dep_gol', 0)
-    son_gol = mac.get('son_gol', 0)
-    shots_ev = mac.get('shots_on_target_ev', 0)
-    shots_dep = mac.get('shots_on_target_dep', 0)
-    possession_ev = mac.get('possession_ev', 50)
-    possession_dep = mac.get('possession_dep', 50)
-    dangerous_ev = mac.get('dangerous_attacks_ev', 0)
-    dangerous_dep = mac.get('dangerous_attacks_dep', 0)
-    kirmizi = mac.get('kirmizi_kart', 0)
-    corner_ev = mac.get('corner_ev', 0)
-    corner_dep = mac.get('corner_dep', 0)
-    corner_toplam = mac.get('corner_toplam', 0)
-    ah_deger = mac.get('ah_deger', 0.0)
+    dk = mac['dakika']
+    eg = mac['ev_gol']
+    dg = mac['dep_gol']
+    toplam_gol = eg + dg
+    gol_fark = abs(eg - dg)
+    esit_skor = (eg == dg)
+    shots_toplam = mac['shots_on_target_ev'] + mac['shots_on_target_dep']
 
-    toplam_gol = ev_gol + dep_gol
-    gol_fark = abs(ev_gol - dep_gol)
-    kg_var = ev_gol > 0 and dep_gol > 0
-    esit_skor =
+    # Puanlama
+    if toplam_gol >= 3:
+        puan += 2
+        stratejiler.append("GOL_POTANSIYELI")
+    
+    if esit_skor:
+        puan += 2
+        puan_detay.append("Beraberlik Dengesi")
+        stratejiler.append("BERABERLIK")
+
+    if shots_toplam >= 10:
+        puan += 2
+        stratejiler.append("HUCUM_MACI")
+
+    if mac['kirmizi_kart'] > 0:
+        puan += 1
+        stratejiler.append("KIRMIZI_KART")
+
+    bonus, label = zaman_bonusu_hesapla(dk)
+    if bonus > 0:
+        puan += bonus
+        puan_detay.append(label)
+
+    strat_adi = stratejiler[0] if stratejiler else "GENEL_ANALIZ"
+    return puan, puan_detay, strat_adi
+
+def tavsiye_uret(mac, strateji):
+    eg, dg = mac['ev_gol'], mac['dep_gol']
+    if strateji == "BERABERLIK":
+        return "GOL OLACAK (S)", "Beraberlik bozulma eğiliminde."
+    if eg > dg:
+        return "EV GOL ATACAK (S)", "Ev sahibi baskısını sürdürüyor."
+    return "GOL OLACAK (S)", "Maç temposu yüksek."
+
+# ================================================
+# AI VE DIS SERVISLER
+# ================================================
+async def gemini_analiz(mac, puan, tahmin):
+    if not GEMINI_KEY: return "AI Devre Dışı", 1.5
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
+    
+    prompt = f"Maç: {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']} (Dakika: {mac['dakika']}). Tahmin: {tahmin}. Bu maçı 1 cümleyle yorumla ve % kaç kasa girilmeli söyle. JSON: {{\"yorum\": \"...\", \"kasa\": 1.5}}"
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            payload = {"contents": [{"parts": [{"text": prompt}]}]}
+            async with session.post(url, json=payload, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    text = data['candidates'][0]['content']['parts'][0]['text']
+                    if "
