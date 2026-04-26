@@ -418,7 +418,8 @@ def tavsiye_uret(mac, strateji):
         elif gol_fark <= -2:
             tahmin = "DEP GOL ATACAK (S)"
             neden = f"Deplasman {abs(gol_fark)} gol farkla onunde"
-        elif toplam_gol >= 3 and kg_var := (ev_gol > 0 and dep_gol > 0):
+        # Hata buradaydı: Walrus operatörü (:=) and/or içinde parantezsiz kullanılınca hata verir.
+        elif toplam_gol >= 3 and (kg_var := (ev_gol > 0 and dep_gol > 0)):
             tahmin = "GOL OLACAK (S)"
             neden = f"Mac cok acik, {toplam_gol} gol var ve tempo yuksek"
         elif possession_ev >= 65:
