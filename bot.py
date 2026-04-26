@@ -124,7 +124,7 @@ async def sonuc_guncelle(mac_id, sonuc, final_ev, final_dep):
 
 
 # ================================================
-# COOLING OFF — sadece çok açık durumlarda
+# COOLING OFF
 # ================================================
 def cooling_off_kontrol(mac):
     dakika = mac.get('dakika', 0)
@@ -153,7 +153,7 @@ def zaman_bonusu_hesapla(dakika):
 
 
 # ================================================
-# SİNYAL SİSTEMİ — PUAN AÇIKLAMALI
+# SİNYAL SİSTEMİ
 # ================================================
 def sinyal_hesapla(mac):
     puan = 0
@@ -179,30 +179,4 @@ def sinyal_hesapla(mac):
     toplam_gol = ev_gol + dep_gol
     gol_fark = abs(ev_gol - dep_gol)
     kg_var = ev_gol > 0 and dep_gol > 0
-    esit_skor = ev_gol == dep_gol
-    gol_hizi = round(toplam_gol / dakika, 3) if dakika > 0 else 0
-    shots_toplam = shots_ev + shots_dep
-    dangerous_toplam = dangerous_ev + dangerous_dep
-
-    # ---- GOL BAZLI ----
-    if toplam_gol >= 4:
-        puan += 2
-        puan_detay.append(f"+2: {toplam_gol} gol var (yuksek tempo)")
-        stratejiler.append("GOL_PATLAMASI")
-    elif toplam_gol >= 3:
-        puan += 1
-        puan_detay.append(f"+1: {toplam_gol} gol var")
-
-    if kg_var:
-        puan += 1
-        puan_detay.append("+1: KG var")
-
-    if gol_fark >= 3:
-        puan += 2
-        puan_detay.append(f"+2: {gol_fark} gol fark")
-        stratejiler.append("BUYUK_FARK")
-    elif gol_fark >= 2:
-        puan += 1
-        puan_detay.append(f"+1: {gol_fark} gol fark")
-
-    if gol_hizi >= 0.1
+    esit_skor =
