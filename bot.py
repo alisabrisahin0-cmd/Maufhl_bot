@@ -1031,7 +1031,7 @@ async def ana_dongu():
         except Exception as e:
             logger.error(f"Ana dongu: {e}")
 
-        await asyncio.sleep(420)  # 7 dakika
+        await asyncio.sleep(600)  # 10 dakika
 
 
 if __name__ == "__main__":
