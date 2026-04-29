@@ -8,6 +8,7 @@ Format: Istenen gorunum + Derin Gemini analizi
 
 import asyncio
 import aiohttp
+from aiohttp import web
 from telegram import Bot
 import logging
 import os
@@ -37,6 +38,26 @@ BASE_URL = "https://v3.football.api-sports.io"
 
 
 # ================================================
+# SAHTE WEB SUNUCUSU (RAILWAY'İ KANDIRMAK İÇİN)
+# ================================================
+async def handle_ping(request):
+    return web.Response(text="Bot aktif ve calisiyor!")
+
+async def web_server_baslat():
+    try:
+        app = web.Application()
+        app.router.add_get('/', handle_ping)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        port = int(os.environ.get("PORT", 8080))
+        site = web.TCPSite(runner, '0.0.0.0', port)
+        await site.start()
+        logger.info(f"Sahte web sunucusu {port} portunda basladi. Railway kandirildi!")
+    except Exception as e:
+        logger.error(f"Web sunucu baslatilamadi: {e}")
+
+
+# ================================================
 # ZAMAN YÖNETİMİ
 # ================================================
 def aktif_mi():
@@ -60,7 +81,6 @@ def sonraki_aktif():
 async def db_baglanti():
     global db_pool
     try:
-        # Asyncpg 'postgres://' sevmez, 'postgresql://' olmali
         url = DATABASE_URL
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql://", 1)
@@ -690,219 +710,4 @@ async def haftalik_rapor(bot):
 async def aylik_rapor(bot):
     try:
         rows = await db_pool.fetch(
-            "SELECT * FROM sinyaller WHERE bildirim_zamani > $1 AND sonuc != 'BEKLIYOR'",
-            datetime.now() - timedelta(days=30)
-        )
-        if not rows:
-            return
-        toplam = len(rows)
-        kazanan = len([r for r in rows if r['sonuc'] == 'TUTTU'])
-        oran = round(kazanan / toplam * 100, 1)
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=f"📊 AYLIK RAPOR\nToplam: {toplam} | Kazanan: {kazanan}\nBaşarı: %{oran}"
-        )
-    except Exception as e:
-        logger.error(f"Aylik: {e}")
-
-
-# ================================================
-# SONUÇ KONTROLÜ
-# ================================================
-def sonuc_kontrol(tahmin, bas_ev, bas_dep, fin_ev, fin_dep):
-    yeni_ev = fin_ev - bas_ev
-    yeni_dep = fin_dep - bas_dep
-    toplam = yeni_ev + yeni_dep
-    if "GOL OLACAK" in tahmin or "ÜST" in tahmin:
-        return "TUTTU" if toplam >= 1 else "DSTU"
-    elif "EV GOL" in tahmin:
-        return "TUTTU" if yeni_ev >= 1 else "DSTU"
-    elif "DEP GOL" in tahmin:
-        return "TUTTU" if yeni_dep >= 1 else "DSTU"
-    elif "EV KAZANIR" in tahmin:
-        return "TUTTU" if fin_ev >= fin_dep else "DSTU"
-    elif "DEP KAZANIR" in tahmin:
-        return "TUTTU" if fin_dep >= fin_ev else "DSTU"
-    return "BELIRSIZ"
-
-
-# ================================================
-# ODDS ÇEK
-# ================================================
-async def odds_cek(fixture_ids: list):
-    if not fixture_ids:
-        return {}
-
-    odds_map = {}
-    try:
-        async with aiohttp.ClientSession() as session:
-            url = f"{BASE_URL}/odds/live"
-            async with session.get(url, headers=API_HEADERS, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    results = data.get('response', [])
-                    logger.info(f"Odds API: {len(results)} sonuç")
-
-                    for item in results:
-                        fid = str(item.get('fixture', {}).get('id', ''))
-                        if fid not in [str(x) for x in fixture_ids]:
-                            continue
-
-                        ah_deger = 0.0
-                        ev_oran = 0.0
-                        dep_oran = 0.0
-
-                        for bet in item.get('bets', []):
-                            bet_name = bet.get('name', '').lower()
-                            if 'asian handicap' in bet_name:
-                                for v in bet.get('values', []):
-                                    val_str = v.get('value', '')
-                                    odd_val = float(v.get('odd', 0) or 0)
-                                    if 'home' in val_str.lower():
-                                        ev_oran = odd_val
-                                        for part in val_str.split():
-                                            try:
-                                                ah_deger = float(part)
-                                                break
-                                            except:
-                                                pass
-                                    elif 'away' in val_str.lower():
-                                        dep_oran = odd_val
-
-                        odds_map[fid] = {
-                            'ah_deger': ah_deger,
-                            'ev_oran': ev_oran,
-                            'dep_oran': dep_oran,
-                        }
-                else:
-                    logger.error(f"Odds API hata: {resp.status}")
-    except Exception as e:
-        logger.error(f"Odds cekme: {e}")
-
-    return odds_map
-
-
-# ================================================
-# VERİ ÇEKME
-# ================================================
-async def maclari_cek():
-    maclar = []
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{BASE_URL}/fixtures?live=all", headers=API_HEADERS, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status != 200:
-                    logger.error(f"API hata: {resp.status}")
-                    return maclar
-                data = await resp.json()
-                if data.get('errors'):
-                    logger.error(f"API errors: {data['errors']}")
-                    return maclar
-                fixtures = data.get('response', [])
-                logger.info(f"{len(fixtures)} canli mac")
-
-                for f in fixtures:
-                    try:
-                        fixture = f.get('fixture', {})
-                        teams = f.get('teams', {})
-                        goals = f.get('goals', {})
-                        league = f.get('league', {})
-
-                        mac_id = str(fixture.get('id', ''))
-                        ev = teams.get('home', {}).get('name', '?')
-                        dep = teams.get('away', {}).get('name', '?')
-                        lig = league.get('name', '?')
-                        dakika = int(fixture.get('status', {}).get('elapsed', 0) or 0)
-
-                        if dakika < 5 or dakika > 88:
-                            continue
-
-                        ev_gol = int(goals.get('home', 0) or 0)
-                        dep_gol = int(goals.get('away', 0) or 0)
-                        home_id = teams.get('home', {}).get('id')
-
-                        stats = {
-                            'shots_on_target_ev': 0, 'shots_on_target_dep': 0,
-                            'possession_ev': 50, 'possession_dep': 50,
-                            'dangerous_attacks_ev': 0, 'dangerous_attacks_dep': 0,
-                            'sari_kart_ev': 0, 'sari_kart_dep': 0,
-                            'kirmizi_kart': 0, 'son_gol': 0,
-                            'corner_ev': 0, 'corner_dep': 0, 'corner_toplam': 0,
-                            'ah_deger': 0.0,
-                        }
-
-                        for stat_group in f.get('statistics', []):
-                            team_id = stat_group.get('team', {}).get('id')
-                            is_home = (team_id == home_id)
-                            for s in stat_group.get('statistics', []):
-                                tip = s.get('type', '').lower()
-                                val = s.get('value', 0)
-                                if val is None:
-                                    val = 0
-                                if isinstance(val, str) and '%' in val:
-                                    try:
-                                        val = int(val.replace('%', '').strip())
-                                    except:
-                                        val = 0
-                                else:
-                                    try:
-                                        val = int(val)
-                                    except:
-                                        val = 0
-
-                                if 'shots on goal' in tip or 'on target' in tip:
-                                    if is_home:
-                                        stats['shots_on_target_ev'] = val
-                                    else:
-                                        stats['shots_on_target_dep'] = val
-                                elif 'ball possession' in tip:
-                                    if is_home:
-                                        stats['possession_ev'] = val
-                                    else:
-                                        stats['possession_dep'] = val
-                                elif 'dangerous attacks' in tip:
-                                    if is_home:
-                                        stats['dangerous_attacks_ev'] = val
-                                    else:
-                                        stats['dangerous_attacks_dep'] = val
-                                elif 'yellow cards' in tip:
-                                    if is_home:
-                                        stats['sari_kart_ev'] = val
-                                    else:
-                                        stats['sari_kart_dep'] = val
-                                elif 'red cards' in tip:
-                                    stats['kirmizi_kart'] += val
-                                elif 'corner kicks' in tip or 'corners' in tip:
-                                    if is_home:
-                                        stats['corner_ev'] = val
-                                    else:
-                                        stats['corner_dep'] = val
-                                    stats['corner_toplam'] = stats['corner_ev'] + stats['corner_dep']
-
-                        for bet in f.get('odds', {}).get('bets', []):
-                            if 'asian handicap' in bet.get('name', '').lower():
-                                for v in bet.get('values', []):
-                                    if 'home' in v.get('value', '').lower():
-                                        for p in v.get('value', '').split():
-                                            try:
-                                                stats['ah_deger'] = float(p)
-                                                break
-                                            except:
-                                                pass
-
-                        son_gol = 0
-                        for event in f.get('events', []):
-                            if event.get('type') == 'Goal':
-                                gdk = int(event.get('time', {}).get('elapsed', 0) or 0)
-                                if gdk > son_gol:
-                                    son_gol = gdk
-                        stats['son_gol'] = son_gol
-
-                        maclar.append({
-                            'id': mac_id, 'ev': ev, 'dep': dep, 'lig': lig,
-                            'dakika': dakika, 'ev_gol': ev_gol, 'dep_gol': dep_gol,
-                            **stats
-                        })
-                    except Exception as e:
-                        logger.error(f"Mac parse: {e}")
-    except Exception as e:
-        logger
+            "SELECT * FROM sinyaller WHERE bildirim_zam
