@@ -8,7 +8,7 @@ Format: Istenen gorunum + Derin Gemini analizi
 
 import asyncio
 import aiohttp
-from aiohttp import web
+from aiohttp import web  # Railway için eklendi
 from telegram import Bot
 import logging
 import os
@@ -23,6 +23,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 GEMINI_KEY = os.getenv("GEMINI_KEY", "")
 MIN_PUAN = int(os.getenv("MIN_PUAN", "6"))
 
+# Logların anında görünmesi için ayar
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -37,25 +38,19 @@ API_HEADERS = {
 BASE_URL = "https://v3.football.api-sports.io"
 
 
-# ================================================
-# SAHTE WEB SUNUCUSU (RAILWAY'İ KANDIRMAK İÇİN)
-# ================================================
+# --- RAILWAY'İ KANDIRMAK İÇİN SAHTE WEB SUNUCUSU ---
 async def handle_ping(request):
-    return web.Response(text="Bot aktif ve calisiyor!")
+    return web.Response(text="Bot aktif!")
 
 async def web_server_baslat():
-    try:
-        app = web.Application()
-        app.router.add_get('/', handle_ping)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        port = int(os.environ.get("PORT", 8080))
-        site = web.TCPSite(runner, '0.0.0.0', port)
-        await site.start()
-        logger.info(f"Sahte web sunucusu {port} portunda basladi. Railway kandirildi!")
-    except Exception as e:
-        logger.error(f"Web sunucu baslatilamadi: {e}")
-
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logger.info(f"Railway için port {port} açıldı.")
 
 # ================================================
 # ZAMAN YÖNETİMİ
@@ -81,10 +76,11 @@ def sonraki_aktif():
 async def db_baglanti():
     global db_pool
     try:
+        # Postgres URL düzeltmesi (asyncpg için)
         url = DATABASE_URL
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql://", 1)
-            
+
         db_pool = await asyncpg.create_pool(url)
         await db_pool.execute("""
             CREATE TABLE IF NOT EXISTS sinyaller (
@@ -125,8 +121,8 @@ async def sinyal_kaydet(mac, puan, strateji, tahmin, ai_yorum, kasa):
     try:
         if db_pool:
             await db_pool.execute("""
-                INSERT INTO sinyaller 
-                (mac_id, ev, dep, lig, dakika, ev_gol, dep_gol, 
+                INSERT INTO sinyaller
+                (mac_id, ev, dep, lig, dakika, ev_gol, dep_gol,
                  puan, strateji, tahmin, ai_yorum, kasa_yuzde)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             """, mac['id'], mac['ev'], mac['dep'], mac['lig'],
@@ -175,7 +171,7 @@ def winning_code_kontrol(mac):
         'TUM_val': 1 if TUM else 0,
         'MA_val': 0 if MA else 1,
         'DIYI_val': 0 if DIYI else 1,
-        'detay': "Tüm parametreler"
+        'detay': "Winning Code parametreleri"
     }
 
 
@@ -281,7 +277,7 @@ def sinyal_hesapla(mac):
             detay.append(f"⚠️ WC Kısmi ({wc['detay']}) ama EXTREME VALUE +2.0")
             stratejiler.append("EXTREME_VALUE")
         else:
-            return 0, [], "", wc 
+            return 0, [], "", wc
     else:
         puan += 4
         detay.append(
@@ -602,112 +598,19 @@ async def gemini_analiz(mac, puan, strateji, tahmin, neden, wc):
     else:
         durum = f"{mac['dep']} {gol_fark} gol önde"
 
-    prompt = f"""Sen üst düzey bir futbol veri analisti ve risk uzmanısın. Kalıp cümleler kurmaz, sadece elindeki canlı maç verisine dayanarak keskin, bağımsız ve tamamen objektif bir okuma yaparsın.
+    prompt = f"""Sen üst düzey bir futbol veri analisti ve risk uzmanısın.
 
-MAÇ BİLGİSİ:
-- Karşılaşma: {mac['ev']} {ev_gol}-{dep_gol} {mac['dep']} (Lig: {mac['lig']})
-- Dakika: {dakika} | Durum: {durum}
-- Asian Handicap: {ah if ah != 0 else 'Yok'}
+MAÇ: {mac['ev']} {ev_gol}-{dep_gol} {mac['dep']} ({mac['lig']}) | DK: {dakika} | DURUM: {durum}
 
-CANLI İSTATİSTİKLER (Ev vs Dep):
-- İsabetli Şut: {shots_ev} - {shots_dep}
-- Topa Sahip Olma: %{possession_ev} - %{100-possession_ev}
-- Tehlikeli Atak: {dangerous_ev} - {dangerous_dep}
-- Korner: {corner_ev} - {corner_dep}
-- Kırmızı Kart: {kirmizi}
-- Son Gol: {son_gol}. dakika ({gecen} dakika önce)
+İSTATİSTİKLER:
+- Şut: {shots_ev} vs {shots_dep} | Top: %{possession_ev} vs %{100-possession_ev}
+- Tehlikeli Atak: {dangerous_ev} vs {dangerous_dep} | Corner: {corner_ev} vs {corner_dep}
+- Son gol: {son_gol}. dk | Kırmızı: {kirmizi} | AH: {ah if ah != 0 else 'yok'}
 
-SİSTEMİN MATEMATİKSEL TAHMİNİ: {tahmin} (Sinyal Gücü: {puan}/12)
+GÖREV: Sadece bu verilere odaklanarak 3 cümleyi geçmeyen, "Winning Code onaylı" gibi kalıplar içermeyen keskin bir analiz yap.
 
-GÖREV:
-Bu verileri inceleyerek maçın şu anki dinamiklerini oku. Algoritmanın bulamadığı riskleri bulman gerekiyor. İki katmanlı düşün:
-1. Görünen: Momentum kimde? Son golün etkisi sürüyor mu? Şut/Atak baskısı gerçekçi mi?
-2. Görünmeyen (Kritik): Öndeki takım rölantiye almış veya skoru korumaya yatmış olabilir mi? Deplasman takımı tamamen kapanmış ve kontraya çıkıyor olabilir mi? İstatistikler göz boyuyor olabilir mi?
-
-KESİN KURALLAR:
-- ASLA "Atak sürekliliği", "Winning Code", "gol ihtimalini güçlendiriyor", "skor dengede" gibi basit ve klişe kelimeler KULLANMA.
-- Algoritmayı övme, sadece maça odaklan.
-- Sadece bu maça özel, somut ve doğrudan sadede gelen maksimum 3 cümlelik bir yorum yaz.
-- Çıktını KESİNLİKLE aşağıdaki JSON formatında ver:
-
+JSON FORMATI:
 {{
-  "yorum": "Maksimum 3 cümlelik keskin ve özgün analizin",
+  "yorum": "analiziniz",
   "gir": true,
-  "kasa": 1.5
-}}
-"""
-
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.7, 
-            "maxOutputTokens": 250,
-            "responseMimeType": "application/json" 
-        }
-    }
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    text = data['candidates'][0]['content']['parts'][0]['text'].strip()
-                    
-                    try:
-                        result = json.loads(text)
-                        yorum = result.get('yorum', '')
-                        kasa = float(result.get('kasa', 1.5))
-                        if not result.get('gir', True):
-                            kasa = 0.0
-                        logger.info(f"Gemini OK: gir={result.get('gir')} kasa={kasa}")
-                        return yorum, kasa
-                    except json.JSONDecodeError:
-                        logger.error("Gemini JSON parse edilemedi.")
-                        return None, None
-                else:
-                    logger.error(f"Gemini API Hatası {resp.status}")
-                    return None, None
-    except Exception as e:
-        logger.error(f"Gemini: {e}")
-        return None, None
-
-
-# ================================================
-# RAPORLAR
-# ================================================
-async def haftalik_rapor(bot):
-    try:
-        rows = await db_pool.fetch(
-            "SELECT * FROM sinyaller WHERE bildirim_zamani > $1 AND sonuc != 'BEKLIYOR'",
-            datetime.now() - timedelta(days=7)
-        )
-        if not rows:
-            return
-        toplam = len(rows)
-        kazanan = len([r for r in rows if r['sonuc'] == 'TUTTU'])
-        oran = round(kazanan / toplam * 100, 1)
-        strateji_stats = {}
-        for r in rows:
-            s = r.get('strateji') or 'Diger'
-            if s not in strateji_stats:
-                strateji_stats[s] = {'k': 0, 't': 0}
-            strateji_stats[s]['t'] += 1
-            if r['sonuc'] == 'TUTTU':
-                strateji_stats[s]['k'] += 1
-        en_iyi = max(
-            [(k, v) for k, v in strateji_stats.items() if v['t'] >= 2],
-            key=lambda x: x[1]['k'] / x[1]['t'],
-            default=('Yok', {'k': 0, 't': 1})
-        )
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=f"📊 HAFTALIK RAPOR\n\nToplam: {toplam} | Kazanan: {kazanan}\nBaşarı: %{oran}\nEn iyi: {en_iyi[0]}"
-        )
-    except Exception as e:
-        logger.error(f"Haftalik: {e}")
-
-
-async def aylik_rapor(bot):
-    try:
-        rows = await db_pool.fetch(
-            "SELECT * FROM sinyaller WHERE bildirim_zam
+  "kasa": 1
