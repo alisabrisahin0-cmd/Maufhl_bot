@@ -47,7 +47,6 @@ def aktif_mi():
         return 19 <= saat <= 23  # 19:00 - 23:59
     else:  # Hafta sonu Cmt-Pzr
         return 19 <= saat <= 22  # 19:00 - 22:59
-    return False
 
 
 def sonraki_aktif():
@@ -58,10 +57,15 @@ def sonraki_aktif():
 # ================================================
 # VERİTABANI
 # ================================================
-async def db_baglant():
+async def db_baglanti():
     global db_pool
     try:
-        db_pool = await asyncpg.create_pool(DATABASE_URL)
+        # Asyncpg 'postgres://' sevmez, 'postgresql://' olmali
+        url = DATABASE_URL
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+            
+        db_pool = await asyncpg.create_pool(url)
         await db_pool.execute("""
             CREATE TABLE IF NOT EXISTS sinyaller (
                 id SERIAL PRIMARY KEY,
@@ -101,8 +105,8 @@ async def sinyal_kaydet(mac, puan, strateji, tahmin, ai_yorum, kasa):
     try:
         if db_pool:
             await db_pool.execute("""
-                INSERT INTO sinyaller
-                (mac_id, ev, dep, lig, dakika, ev_gol, dep_gol,
+                INSERT INTO sinyaller 
+                (mac_id, ev, dep, lig, dakika, ev_gol, dep_gol, 
                  puan, strateji, tahmin, ai_yorum, kasa_yuzde)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             """, mac['id'], mac['ev'], mac['dep'], mac['lig'],
@@ -151,6 +155,7 @@ def winning_code_kontrol(mac):
         'TUM_val': 1 if TUM else 0,
         'MA_val': 0 if MA else 1,
         'DIYI_val': 0 if DIYI else 1,
+        'detay': "Tüm parametreler"
     }
 
 
@@ -192,13 +197,10 @@ def cooling_off(mac):
 # SİNYAL SİSTEMİ
 # ================================================
 def sinyal_hesapla(mac):
-    # ---- LİG KATSAYILARI (Volatility Index) ----
     LIG_KATSAYISI = {
-        # Yüksek gol ligleri
         'Eredivisie': 1.3, 'Bundesliga': 1.2, 'Premier League': 1.15,
         'Champions League': 1.1, 'La Liga': 1.1, 'Ligue 1': 1.1,
         'Serie A': 1.0, 'Super Lig': 1.1,
-        # Düşük gol ligleri
         'Serie B': 0.9, 'Ligue 2': 0.9,
     }
     lig = mac.get('lig', '')
@@ -209,14 +211,11 @@ def sinyal_hesapla(mac):
             break
 
     wc = winning_code_kontrol(mac)
-
-    # ---- WC DARBOĞAZ ESNETME ----
-    # WC geçmese bile ekstrem değerlerde puanlamaya al
     puan = 0.0
     detay = []
     stratejiler = []
 
-    dakika = max(mac.get('dakika', 1), 1)  # Sıfıra bölme önlemi
+    dakika = max(mac.get('dakika', 1), 1)
     ev_gol = mac.get('ev_gol', 0)
     dep_gol = mac.get('dep_gol', 0)
     son_gol = mac.get('son_gol', 0)
@@ -227,7 +226,7 @@ def sinyal_hesapla(mac):
     dangerous_ev = mac.get('dangerous_attacks_ev', 0)
     dangerous_dep = mac.get('dangerous_attacks_dep', 0)
     kirmizi = mac.get('kirmizi_kart', 0)
-    kirmizi_taraf = mac.get('kirmizi_taraf', '')  # 'home' veya 'away'
+    kirmizi_taraf = mac.get('kirmizi_taraf', '')
     corner_ev = mac.get('corner_ev', 0)
     corner_dep = mac.get('corner_dep', 0)
     corner_toplam = corner_ev + corner_dep
@@ -241,17 +240,14 @@ def sinyal_hesapla(mac):
     shots_toplam = shots_ev + shots_dep
     dangerous_toplam = dangerous_ev + dangerous_dep
 
-    # DAPM ve SPM (Dakika başına hız)
     dapm_ev = round(dangerous_ev / dakika, 2)
     dapm_dep = round(dangerous_dep / dakika, 2)
     spm_ev = round(shots_ev / dakika, 3)
     spm_toplam = round(shots_toplam / dakika, 3)
 
-    # Kontra atak tespiti: Az top ama çok şut = kontr
     kontra_ev = shots_ev >= 3 and possession_ev < 40
     kontra_dep = shots_dep >= 3 and possession_ev > 60
 
-    # Extreme Value: WC geçmese bile ekstrem durumlar
     extreme_value = (
         shots_toplam >= 12 or
         possession_ev >= 65 or
@@ -261,21 +257,18 @@ def sinyal_hesapla(mac):
 
     if not wc['gecti']:
         if extreme_value:
-            # Extreme value durumunda 2 puan ver, devam et
             puan += 2
             detay.append(f"⚠️ WC Kısmi ({wc['detay']}) ama EXTREME VALUE +2.0")
             stratejiler.append("EXTREME_VALUE")
         else:
-            return 0, [], "", wc  # Sinyal üretilmez
+            return 0, [], "", wc 
     else:
-        # WC tam geçti
         puan += 4
         detay.append(
             f"✅ Winning Code Onayı (VU:{wc['VU_val']} TÜM:{wc['TUM_val']} "
             f"MA:{wc['MA_val']} DİYİ:{wc['DIYI_val']})"
         )
 
-    # ---- DAPM — Dakika Başına Tehlikeli Atak ----
     if dapm_ev >= 1.5:
         puan += 2.0
         detay.append(f"🌪️ Ev Ağır Baskı ({dapm_ev} Atak/Dk) +2.0")
@@ -290,13 +283,11 @@ def sinyal_hesapla(mac):
         detay.append(f"🌪️ Dep Ağır Baskı ({dapm_dep} Atak/Dk) +1.5")
         stratejiler.append("AGIR_BASKI_DEP")
 
-    # ---- SPM — Dakika Başına Şut ----
-    if spm_toplam >= 0.25:  # 4 dk'da 1 şut
+    if spm_toplam >= 0.25:
         puan += 1.5
         detay.append(f"🎯 Yüksek Şut Hızı ({spm_toplam}/Dk) +1.5")
         stratejiler.append("YUKSEK_SUT_HIZI")
 
-    # ---- KONTRA ATAK TESPİTİ ----
     if kontra_dep:
         puan += 1.5
         detay.append(f"⚡ Dep Kontra Atak! (%{possession_ev} top ama {shots_dep} şut) +1.5")
@@ -306,19 +297,16 @@ def sinyal_hesapla(mac):
         detay.append(f"⚡ Ev Kontra Atak! ({shots_ev} şut ama düşük top) +1.5")
         stratejiler.append("KONTRA_ATAK_EV")
 
-    # ---- BERABERLIK BONUSU ----
     if esit_skor:
         puan += 1.5
         detay.append(f"🤝 Skor Dengede +1.5")
         stratejiler.append("BERABERLIK")
 
-    # Value: favori geri ama dominant
     if dep_gol > ev_gol and possession_ev >= 55 and shots_ev > shots_dep:
         puan += 2
         detay.append(f"💎 VALUE: Ev geride ama dominant +2.0")
         stratejiler.append("VALUE_GIRISI")
 
-    # ---- GOL BAZLI ----
     if toplam_gol >= 4:
         puan += 2
         detay.append(f"⚽ {toplam_gol} Gol (Yüksek Tempo) +2.0")
@@ -343,7 +331,6 @@ def sinyal_hesapla(mac):
         puan += 1
         detay.append(f"⚡ Gol Hızı {gol_hizi}/dk +1.0")
 
-    # ---- SHOTS ----
     if shots_toplam >= 12:
         puan += 2
         detay.append(f"🎯 {shots_toplam} İsabetli Şut +2.0")
@@ -359,7 +346,6 @@ def sinyal_hesapla(mac):
         detay.append(f"🎯 {d[:12]} Şut Dom ({shots_ev}/{shots_dep}) +1.0")
         stratejiler.append("SUT_DOMINANT")
 
-    # ---- POSSESSION ----
     poss_fark = abs(possession_ev - possession_dep)
     if poss_fark >= 25:
         puan += 2
@@ -371,7 +357,6 @@ def sinyal_hesapla(mac):
         d = mac['ev'] if possession_ev > possession_dep else mac['dep']
         detay.append(f"⚽ {d[:12]} Top Üst (%{max(possession_ev,possession_dep)}) +1.0")
 
-    # ---- DANGEROUS ATTACKS (Kümülatif) ----
     if dangerous_toplam >= 100:
         puan += 2
         detay.append(f"🔥 {dangerous_toplam} Tehlikeli Atak +2.0")
@@ -380,7 +365,6 @@ def sinyal_hesapla(mac):
         puan += 1
         detay.append(f"🔥 {dangerous_toplam} Tehlikeli Atak +1.0")
 
-    # ---- CORNER ----
     if corner_toplam >= 12:
         puan += 2
         detay.append(f"🚩 {corner_toplam} Corner (Elite) +2.0")
@@ -395,7 +379,6 @@ def sinyal_hesapla(mac):
         d = mac['ev'] if corner_ev > corner_dep else mac['dep']
         detay.append(f"🚩 {d[:12]} Corner Dom ({corner_ev}/{corner_dep}) +1.0")
 
-    # ---- ASIAN HANDICAP ----
     if ah_deger != 0:
         if -1.5 <= ah_deger <= -0.75:
             puan += 2
@@ -409,42 +392,34 @@ def sinyal_hesapla(mac):
             detay.append(f"📈 AH {ah_deger} Dengeli +1.0")
             stratejiler.append("AH_DENGELI")
 
-    # ---- KIRMIZI KART — Derin Mantık ----
     if kirmizi >= 1:
-        # Favori mi, underdog mu kırmızı gördü?
         ev_skoru = possession_ev + shots_ev * 3
         dep_skoru = (100 - possession_ev) + shots_dep * 3
         ev_favori = ev_skoru > dep_skoru
 
         if kirmizi_taraf == 'home' or (not kirmizi_taraf and ev_favori):
-            # Güçlü takım kırmızı gördü → açık alan, kaos
             puan += 2
             detay.append(f"🟥 Güçlü Taraf Kırmızı Kart! Kaos + Açık Alan +2.0")
             stratejiler.append("KIRMIZI_KAOS")
         else:
-            # Zayıf takım kırmızı gördü → park the bus, maç kilitlenir
             puan += 0.5
             detay.append(f"🟥 Zayıf Taraf Kırmızı (Savunma Kapanabilir) +0.5")
             stratejiler.append("KIRMIZI_KILITLI")
 
-    # ---- 0-0 AKTİF ----
     if toplam_gol == 0 and shots_toplam >= 8 and dangerous_toplam >= 50:
         puan += 2
         detay.append(f"💥 0-0 Çok Aktif (VALUE!) +2.0")
         stratejiler.append("GOLSUZ_AKTIF")
 
-    # ---- 2. YARI BAŞI ----
     if 45 <= dakika <= 60 and shots_toplam >= 6:
         puan += 1
         detay.append(f"⏱️ 2. Yarı + {shots_toplam} Şut +1.0")
         stratejiler.append("2Y_BASLANGIC")
 
-    # Son gol taze
     if son_gol >= 70:
         puan += 1
         detay.append(f"⚡ Son Gol {son_gol}dk (Taze) +1.0")
 
-    # ---- ALTIN PENCERE ----
     z_bonus, z_label, z_strateji = zaman_bonusu(dakika)
     if z_bonus > 0:
         puan += z_bonus
@@ -452,7 +427,6 @@ def sinyal_hesapla(mac):
         if z_strateji:
             stratejiler.append(z_strateji)
 
-    # ---- LİG KATSAYISI UYGULA ----
     if lig_katsayisi != 1.0:
         onceki_puan = puan
         puan = round(puan * lig_katsayisi, 1)
@@ -521,7 +495,7 @@ def tavsiye_uret(mac, strateji):
         if possession_ev >= 55:
             return "EV GOL ATACAK (S)", f"54-60 altın pencere + ev sahibi dominant (%{possession_ev} top)"
         return "GOL OLACAK (S)", "54-60 altın pencere, en yüksek gol yoğunluğu dakikaları"
-    # Genel
+    
     if gol_fark >= 2 and possession_ev >= 50:
         return "EV GOL ATACAK (S)", f"Ev sahibi {gol_fark} gol farkla önde ve sahaya hakim"
     elif gol_fark <= -2:
@@ -578,7 +552,7 @@ def kasa_hesapla(puan, dakika, ah_deger):
 # ================================================
 async def gemini_analiz(mac, puan, strateji, tahmin, neden, wc):
     if not GEMINI_KEY:
-        return "AI aktif değil."
+        return "AI aktif değil.", None
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
 
@@ -597,14 +571,8 @@ async def gemini_analiz(mac, puan, strateji, tahmin, neden, wc):
     ah = mac.get('ah_deger', 0)
     kirmizi = mac.get('kirmizi_kart', 0)
     toplam_gol = ev_gol + dep_gol
-
-    sut_fark = abs(shots_ev - shots_dep)
-    atak_fark = abs(dangerous_ev - dangerous_dep)
-    toplam_gol = ev_gol + dep_gol
     gol_fark = abs(ev_gol - dep_gol)
 
-    # Maçın durumunu yorumla
-    durum = ""
     if toplam_gol == 0:
         durum = "GOLsuz maç, her iki takım da henüz gol bulamamış"
     elif ev_gol == dep_gol:
@@ -614,69 +582,70 @@ async def gemini_analiz(mac, puan, strateji, tahmin, neden, wc):
     else:
         durum = f"{mac['dep']} {gol_fark} gol önde"
 
-    prompt = f"""Sen çok deneyimli bir canlı bahis analistsin. Görülmüşsün, çok maç izlemişsin.
+    prompt = f"""Sen üst düzey bir futbol veri analisti ve risk uzmanısın. Kalıp cümleler kurmaz, sadece elindeki canlı maç verisine dayanarak keskin, bağımsız ve tamamen objektif bir okuma yaparsın.
 
-MAÇ: {mac['ev']} {ev_gol}-{dep_gol} {mac['dep']}
-LİG: {mac['lig']} | DAKİKA: {dakika} | DURUM: {durum}
+MAÇ BİLGİSİ:
+- Karşılaşma: {mac['ev']} {ev_gol}-{dep_gol} {mac['dep']} (Lig: {mac['lig']})
+- Dakika: {dakika} | Durum: {durum}
+- Asian Handicap: {ah if ah != 0 else 'Yok'}
 
-İSTATİSTİKLER:
-- Şut (isabetli): {mac['ev']}={shots_ev} vs {mac['dep']}={shots_dep}
-- Top: {mac['ev']}=%{possession_ev} vs {mac['dep']}=%{100-possession_ev}
-- Tehlikeli Atak: {mac['ev']}={dangerous_ev} vs {mac['dep']}={dangerous_dep}
-- Corner: {mac['ev']}={corner_ev} vs {mac['dep']}={corner_dep}
-- Son gol: {son_gol}. dk ({gecen} dk önce)
-- Kırmızı kart: {kirmizi}
-- Asian Handicap: {ah if ah != 0 else 'yok'}
+CANLI İSTATİSTİKLER (Ev vs Dep):
+- İsabetli Şut: {shots_ev} - {shots_dep}
+- Topa Sahip Olma: %{possession_ev} - %{100-possession_ev}
+- Tehlikeli Atak: {dangerous_ev} - {dangerous_dep}
+- Korner: {corner_ev} - {corner_dep}
+- Kırmızı Kart: {kirmizi}
+- Son Gol: {son_gol}. dakika ({gecen} dakika önce)
 
-BOT KARARI: {tahmin} | Puan: {puan}/12
+SİSTEMİN MATEMATİKSEL TAHMİNİ: {tahmin} (Sinyal Gücü: {puan}/12)
 
-GÖREV — İKİ KATMANLI ANALİZ YAP:
+GÖREV:
+Bu verileri inceleyerek maçın şu anki dinamiklerini oku. Algoritmanın bulamadığı riskleri bulman gerekiyor. İki katmanlı düşün:
+1. Görünen: Momentum kimde? Son golün etkisi sürüyor mu? Şut/Atak baskısı gerçekçi mi?
+2. Görünmeyen (Kritik): Öndeki takım rölantiye almış veya skoru korumaya yatmış olabilir mi? Deplasman takımı tamamen kapanmış ve kontraya çıkıyor olabilir mi? İstatistikler göz boyuyor olabilir mi?
 
-KATMAN 1 — İstatistiklerin söylediği:
-{mac['ev']} {shots_ev} şutla daha mı tehlikeli yoksa {shots_dep} şutlu {mac['dep']} mi? Son gol {gecen}dk önce — momentum hala var mı?
+KESİN KURALLAR:
+- ASLA "Atak sürekliliği", "Winning Code", "gol ihtimalini güçlendiriyor", "skor dengede" gibi basit ve klişe kelimeler KULLANMA.
+- Algoritmayı övme, sadece maça odaklan.
+- Sadece bu maça özel, somut ve doğrudan sadede gelen maksimum 3 cümlelik bir yorum yaz.
+- Çıktını KESİNLİKLE aşağıdaki JSON formatında ver:
 
-KATMAN 2 — İstatistiklerin SÖYLEMEDIĞI (en önemli kısım):
-Şu soruları düşün ve maça özgü cevapla:
-- Bu skor durumunda ({ev_gol}-{dep_gol}) öndeki takım kasıtlı yavaşlıyor olabilir mi?
-- {dakika}. dakikada oyuncular fiziksel olarak yorulmuş olabilir mi? Tempo düşmüş mü?
-- Deplasman takımı kontr atak için bekliyorsa istatistikler yanıltıcı olabilir mi?
-- {mac['lig']} liginde bu tür maçlar genelde nasıl biter? Gol geç mi gelir?
-- İstatistikler güçlü görünse de gol GELMEYEBİLİR mi? Neden?
+{{
+  "yorum": "Maksimum 3 cümlelik keskin ve özgün analizin",
+  "gir": true,
+  "kasa": 1.5
+}}
+"""
 
-KURAL: "Atak sürekliliği", "Winning Code onaylı", "gol ihtimalini güçlendiriyor" gibi kalıp cümleler KESİNLİKLE YASAK.
-Sadece bu maça özel, somut, keskin gözlem yap.
-Maksimum 3 cümle. Türkçe.
-
-JSON: {{"yorum": "iki_katmanli_ozgun_analiz", "gir": true, "kasa": 1.5}}"""
-
-    try:
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 250}
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.7, 
+            "maxOutputTokens": 250,
+            "responseMimeType": "application/json" 
         }
+    }
+    
+    try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url, json=payload,
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     text = data['candidates'][0]['content']['parts'][0]['text'].strip()
-                    if "```" in text:
-                        parts = text.split("```")
-                        for part in parts:
-                            if part.startswith("json") or part.startswith("{"):
-                                text = part.replace("json", "").strip()
-                                break
-                    result = json.loads(text)
-                    yorum = result.get('yorum', '')
-                    kasa = float(result.get('kasa', 1.5))
-                    if not result.get('gir', True):
-                        kasa = 0.0
-                    logger.info(f"Gemini OK: gir={result.get('gir')} kasa={kasa}")
-                    return yorum, kasa
+                    
+                    try:
+                        result = json.loads(text)
+                        yorum = result.get('yorum', '')
+                        kasa = float(result.get('kasa', 1.5))
+                        if not result.get('gir', True):
+                            kasa = 0.0
+                        logger.info(f"Gemini OK: gir={result.get('gir')} kasa={kasa}")
+                        return yorum, kasa
+                    except json.JSONDecodeError:
+                        logger.error("Gemini JSON parse edilemedi.")
+                        return None, None
                 else:
-                    logger.error(f"Gemini {resp.status}")
+                    logger.error(f"Gemini API Hatası {resp.status}")
                     return None, None
     except Exception as e:
         logger.error(f"Gemini: {e}")
@@ -758,25 +727,17 @@ def sonuc_kontrol(tahmin, bas_ev, bas_dep, fin_ev, fin_dep):
 
 
 # ================================================
-# ODDS ÇEK — SADECE ADAY MAÇLARA
+# ODDS ÇEK
 # ================================================
 async def odds_cek(fixture_ids: list):
-    """
-    Sadece sinyal geçen maçlara odds sor.
-    API hak tasarrufu: Her döngüde max 5-10 istek.
-    """
     if not fixture_ids:
         return {}
 
     odds_map = {}
     try:
         async with aiohttp.ClientSession() as session:
-            # Tüm canlı odds tek seferde çek
             url = f"{BASE_URL}/odds/live"
-            async with session.get(
-                url, headers=API_HEADERS,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
+            async with session.get(url, headers=API_HEADERS, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     results = data.get('response', [])
@@ -799,7 +760,6 @@ async def odds_cek(fixture_ids: list):
                                     odd_val = float(v.get('odd', 0) or 0)
                                     if 'home' in val_str.lower():
                                         ev_oran = odd_val
-                                        # AH değerini parse et: "Home -1.5" → -1.5
                                         for part in val_str.split():
                                             try:
                                                 ah_deger = float(part)
@@ -825,15 +785,11 @@ async def odds_cek(fixture_ids: list):
 # ================================================
 # VERİ ÇEKME
 # ================================================
-async def macları_cek():
+async def maclari_cek():
     maclar = []
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{BASE_URL}/fixtures?live=all",
-                headers=API_HEADERS,
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
+            async with session.get(f"{BASE_URL}/fixtures?live=all", headers=API_HEADERS, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status != 200:
                     logger.error(f"API hata: {resp.status}")
                     return maclar
@@ -922,7 +878,6 @@ async def macları_cek():
                                         stats['corner_dep'] = val
                                     stats['corner_toplam'] = stats['corner_ev'] + stats['corner_dep']
 
-                        # Odds
                         for bet in f.get('odds', {}).get('bets', []):
                             if 'asian handicap' in bet.get('name', '').lower():
                                 for v in bet.get('values', []):
@@ -934,7 +889,6 @@ async def macları_cek():
                                             except:
                                                 pass
 
-                        # Son gol
                         son_gol = 0
                         for event in f.get('events', []):
                             if event.get('type') == 'Goal':
@@ -951,272 +905,4 @@ async def macları_cek():
                     except Exception as e:
                         logger.error(f"Mac parse: {e}")
     except Exception as e:
-        logger.error(f"API: {e}")
-    return maclar
-
-
-# ================================================
-# BİLDİRİM — İSTENEN FORMAT
-# ================================================
-async def bildirim_gonder(bot, mac, puan, detay, strateji, tahmin, neden, ai_yorum, ai_kasa):
-    kasa = ai_kasa if ai_kasa is not None else kasa_hesapla(
-        puan, mac['dakika'], mac.get('ah_deger', 0)
-    )
-
-    # AI iptal mi?
-    if kasa == 0 and ai_yorum:
-        mesaj = (
-            f"⚠️ AI UYARISI — GİRME!\n"
-            f"{mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']}\n"
-            f"{mac['lig']} | {mac['dakika']}. Dk\n\n"
-            f"🧠 AI: {ai_yorum}"
-        )
-        await bot.send_message(chat_id=CHAT_ID, text=mesaj)
-        await sinyal_kaydet(mac, puan, strateji, tahmin, ai_yorum, 0)
-        return
-
-    # Emoji ve karar
-    if puan >= 10:
-        karar_emoji = "🔥🔥"
-        karar = "KESİN GİR"
-    elif puan >= 8:
-        karar_emoji = "🔥"
-        karar = "KESİN GİR"
-    elif puan >= 6:
-        karar_emoji = "✅"
-        karar = "GİREBİLİRSİN"
-    else:
-        karar_emoji = "⚠️"
-        karar = "DİKKATLİ OL"
-
-    # Sonraki gol tahmini
-    sonraki = sonraki_gol_tahmini(mac, strateji)
-
-    # İstatistik satırı
-    ah = mac.get('ah_deger', 0)
-    corner_toplam = mac.get('corner_toplam', 0)
-    istat_satirlari = (
-        f"⚽ Şut: {mac['shots_on_target_ev']}/{mac['shots_on_target_dep']} "
-        f"| 🏃 Top: %{mac['possession_ev']}/%{mac.get('possession_dep',50)}\n"
-        f"💥 Atak: {mac['dangerous_attacks_ev']}/{mac['dangerous_attacks_dep']} "
-        f"| 🚩 Corner: {mac.get('corner_ev',0)}/{mac.get('corner_dep',0)}"
-        + (f" | 📈 AH: {ah}" if ah != 0 else "")
-    )
-
-    # Detay listesi (max 4)
-    detay_str = "\n".join([f"- {d}" for d in detay[:4]])
-
-    mesaj = (
-        f"{karar_emoji} {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']}\n"
-        f"🏆 {mac['lig']} | ⏱️ {mac['dakika']}. DK\n"
-        f"────────────────────\n"
-        f"📈 SİNYAL PUANI: {puan}/12\n"
-        f"🎯 STRATEJİ: {sonraki}\n"
-        f"────────────────────\n"
-        f"📝 SİSTEM ANALİZİ:\n"
-        f"{detay_str}\n"
-        f"────────────────────\n"
-        f"📊 İSTATİSTİKLER:\n"
-        f"{istat_satirlari}\n"
-        f"────────────────────\n"
-        f"🧠 AI ÖZGÜN YORUMU:\n"
-        f"{ai_yorum if ai_yorum else 'Analiz yapılamadı.'}\n"
-        f"────────────────────\n"
-        f"💡 TAHMİN: {tahmin}\n"
-        f"📌 NEDEN: {neden}\n"
-        f"────────────────────\n"
-        f"💰 KASA: %{kasa}\n"
-        f"{'═'*20}\n"
-        f"{karar_emoji} {karar}\n"
-        f"{'═'*20}"
-    )
-
-    try:
-        await bot.send_message(chat_id=CHAT_ID, text=mesaj)
-        await sinyal_kaydet(mac, puan, strateji, tahmin, ai_yorum or "", kasa)
-        logger.info(f"✅ Bildirim: {mac['ev']} vs {mac['dep']} | {puan}p | {tahmin} | %{kasa}")
-    except Exception as e:
-        logger.error(f"Bildirim: {e}")
-
-
-async def sonuc_bildir(bot, mac_id, ev, dep, tahmin, sonuc, fin_ev, fin_dep):
-    emoji = "✅ TUTTU!" if sonuc == "TUTTU" else "❌ DÜŞTÜ!"
-    await bot.send_message(
-        chat_id=CHAT_ID,
-        text=f"📊 SONUÇ: {ev} {fin_ev}-{fin_dep} {dep}\n{emoji}\n💡 Tahmin: {tahmin}"
-    )
-    await sonuc_guncelle(mac_id, sonuc, fin_ev, fin_dep)
-
-
-# ================================================
-# ANA DÖNGÜ
-# ================================================
-async def ana_dongu():
-    bot = Bot(token=TELEGRAM_TOKEN)
-    await db_baglant()
-
-    try:
-        simdi = datetime.now()
-        gun_str = "Hafta Sonu" if simdi.weekday() >= 5 else "Hafta İçi"
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=(
-                "🤖 MAÇ ANALİZ BOTU — AKTİF\n\n"
-                "✅ Winning Code (VU/TÜM/MA/DİYİ)\n"
-                "✅ Altın Pencere Bonusları\n"
-                "✅ Beraberlik & Value Bonusu\n"
-                "✅ Asian Handicap Entegrasyonu\n"
-                "✅ Corner Eşikleri\n"
-                "✅ Cooling Off Koruması\n"
-                "✅ Gemini AI Derin Analiz\n"
-                "✅ Net Tahmin + Neden\n\n"
-                "⏰ Zamanlama:\n"
-                "Hafta İçi: 19:00 — 00:00\n"
-                "Hafta Sonu: 19:00 — 23:00\n\n"
-                f"📅 Şu an: {gun_str} modu\n"
-                f"🎯 Min puan: {MIN_PUAN}/12\n\n"
-                "Hazır! Sinyaller gelince bildirim atacağım 🚀"
-            )
-        )
-        logger.info("Bot basladi!")
-    except Exception as e:
-        logger.error(f"Baslangic: {e}")
-
-    uyku_bildirimi = False
-    son_haftalik = None
-    son_aylik = None
-
-    while True:
-        try:
-            simdi = datetime.now()
-            bugun = simdi.date()
-
-            if simdi.weekday() == 0 and simdi.hour == 9 and son_haftalik != bugun:
-                await haftalik_rapor(bot)
-                son_haftalik = bugun
-
-            if simdi.day == 1 and simdi.hour == 9 and son_aylik != bugun:
-                await aylik_rapor(bot)
-                son_aylik = bugun
-
-            if not aktif_mi():
-                if not uyku_bildirimi:
-                    await bot.send_message(
-                        chat_id=CHAT_ID,
-                        text=f"😴 UYKU MODU\nAPI hakkı korunuyor.\n⏰ Sonraki: {sonraki_aktif()}"
-                    )
-                    uyku_bildirimi = True
-                await asyncio.sleep(1800)
-                continue
-            else:
-                if uyku_bildirimi:
-                    gun = simdi.weekday()
-                    gun_str = "Hafta Sonu" if gun >= 5 else "Hafta İçi"
-                    await bot.send_message(
-                        chat_id=CHAT_ID,
-                        text=f"⚡ UYANDIM! {gun_str} modu aktif\n🔍 Maç taraması başlıyor..."
-                    )
-                    uyku_bildirimi = False
-
-            maclar = await macları_cek()
-            aktif_idler = [m['id'] for m in maclar]
-
-            # Biten maçlar
-            for mac_id, bilgi in list(biten_maclar.items()):
-                if mac_id not in aktif_idler:
-                    sonuc = sonuc_kontrol(
-                        bilgi['tahmin'],
-                        bilgi['bas_ev'], bilgi['bas_dep'],
-                        bilgi['son_ev'], bilgi['son_dep']
-                    )
-                    await sonuc_bildir(
-                        bot, mac_id, bilgi['ev'], bilgi['dep'],
-                        bilgi['tahmin'], sonuc,
-                        bilgi['son_ev'], bilgi['son_dep']
-                    )
-                    del biten_maclar[mac_id]
-                    await asyncio.sleep(1)
-
-            # ADIM 1: Tüm maçları tara, takip listesini güncelle
-            adaylar = []
-            for mac in maclar:
-                puan, detay, strateji, wc = sinyal_hesapla(mac)
-                mac_id = mac['id']
-
-                # Takip listesini güncelle
-                if mac_id in bildirim_gonderilen:
-                    biten_maclar[mac_id] = {
-                        'ev': mac['ev'], 'dep': mac['dep'],
-                        'tahmin': bildirim_gonderilen[mac_id]['tahmin'],
-                        'bas_ev': bildirim_gonderilen[mac_id]['ev_gol'],
-                        'bas_dep': bildirim_gonderilen[mac_id]['dep_gol'],
-                        'son_ev': mac['ev_gol'],
-                        'son_dep': mac['dep_gol'],
-                    }
-
-                if puan == 0:
-                    continue
-
-                if puan >= MIN_PUAN:
-                    onceki = bildirim_gonderilen.get(mac_id, {}).get('puan', 0)
-                    if puan > onceki:
-                        adaylar.append((mac, puan, detay, strateji, wc))
-
-            # ADIM 2: Sadece aday maçlara odds sor (API hak tasarrufu!)
-            if adaylar:
-                aday_idler = [m[0]['id'] for m in adaylar]
-                logger.info(f"{len(adaylar)} aday mac icin odds sorgulanıyor...")
-                odds_data = await odds_cek(aday_idler)
-
-                # Odds'u maçlara ekle ve puanı yeniden hesapla
-                yeni_adaylar = []
-                for mac, puan, detay, strateji, wc in adaylar:
-                    if mac['id'] in odds_data:
-                        mac['ah_deger'] = odds_data[mac['id']].get('ah_deger', 0.0)
-                        mac['ev_oran'] = odds_data[mac['id']].get('ev_oran', 0.0)
-                        mac['dep_oran'] = odds_data[mac['id']].get('dep_oran', 0.0)
-                        # AH geldi, puanı yeniden hesapla
-                        puan, detay, strateji, wc = sinyal_hesapla(mac)
-                        logger.info(f"Odds OK: {mac['ev']} AH={mac['ah_deger']}")
-                    yeni_adaylar.append((mac, puan, detay, strateji, wc))
-                adaylar = yeni_adaylar
-
-            # ADIM 3: Aday maçları bildir
-            for mac, puan, detay, strateji, wc in adaylar:
-                mac_id = mac['id']
-
-                # Cooling Off
-                cooling, cooling_msg = cooling_off(mac)
-                if cooling:
-                    logger.info(f"Cooling Off: {mac['ev']} - {cooling_msg}")
-                    continue
-
-                tahmin, neden = tavsiye_uret(mac, strateji)
-
-                # Gemini AI
-                ai_yorum, ai_kasa = await gemini_analiz(
-                    mac, puan, strateji, tahmin, neden, wc
-                )
-                if ai_yorum is None:
-                    ai_yorum = "AI analiz geçici olarak kullanılamıyor."
-
-                await bildirim_gonder(
-                    bot, mac, puan, detay, strateji,
-                    tahmin, neden, ai_yorum, ai_kasa
-                )
-
-                bildirim_gonderilen[mac_id] = {
-                    'puan': puan, 'tahmin': tahmin,
-                    'ev_gol': mac['ev_gol'], 'dep_gol': mac['dep_gol']
-                }
-                await asyncio.sleep(1)
-
-        except Exception as e:
-            logger.error(f"Ana dongu: {e}")
-
-        await asyncio.sleep(600)  # 10 dakika
-
-
-if __name__ == "__main__":
-    logger.info("BOT STARTED")
-    asyncio.run(ana_dongu())
+        logger
