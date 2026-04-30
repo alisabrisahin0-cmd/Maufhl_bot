@@ -1,6 +1,6 @@
 """
 MAC ANALIZ BOTU - KANTİTATİF SÜRÜM (V2.0 HFT MODELİ)
-Özellikler: Rolling Window, Exponential Decay, AH Death Zone Filter, Artifact Exploit, Gemini AI
+Özellikler: Rolling Window, Exponential Decay, AH Death Zone Filter, Artifact Exploit, Sezgi Motoru (AI)
 """
 
 import asyncio
@@ -9,7 +9,7 @@ from telegram import Bot
 import logging
 import os
 import asyncpg
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -81,9 +81,51 @@ def aktif_mi():
         return 19 <= saat <= 22
 
 # ================================================
+# VERİTABANI BAĞLANTISI
+# ================================================
+async def db_baglant():
+    global db_pool
+    if not DATABASE_URL:
+        logger.warning("DATABASE_URL bulunamadı, veritabanı kapalı.")
+        return
+    try:
+        url = DATABASE_URL
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+        db_pool = await asyncpg.create_pool(url)
+        await db_pool.execute("""
+            CREATE TABLE IF NOT EXISTS sinyaller (
+                id SERIAL PRIMARY KEY, mac_id TEXT, ev TEXT, dep TEXT, lig TEXT,
+                dakika INTEGER, ev_gol INTEGER, dep_gol INTEGER, puan REAL,
+                strateji TEXT, tahmin TEXT, ai_yorum TEXT, kasa_yuzde REAL,
+                bildirim_zamani TIMESTAMP DEFAULT NOW(), sonuc TEXT DEFAULT 'BEKLIYOR',
+                final_ev_gol INTEGER DEFAULT 0, final_dep_gol INTEGER DEFAULT 0
+            )
+        """)
+        logger.info("Veritabanı bağlandı!")
+    except Exception as e:
+        logger.error(f"DB Hatası: {e}")
+
+async def sinyal_kaydet(mac, puan, strateji, tahmin, ai_yorum, kasa):
+    try:
+        if db_pool:
+            await db_pool.execute("""
+                INSERT INTO sinyaller (mac_id, ev, dep, lig, dakika, ev_gol, dep_gol, puan, strateji, tahmin, ai_yorum, kasa_yuzde)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            """, mac['id'], mac['ev'], mac['dep'], mac['lig'], mac['dakika'], mac['ev_gol'], mac['dep_gol'], puan, strateji, tahmin, ai_yorum, kasa)
+    except Exception as e: logger.error(f"Kayıt Hatası: {e}")
+
+async def sonuc_guncelle(mac_id, sonuc, final_ev, final_dep):
+    try:
+        if db_pool:
+            await db_pool.execute("""
+                UPDATE sinyaller SET sonuc=$1, final_ev_gol=$2, final_dep_gol=$3 WHERE mac_id=$4 AND sonuc='BEKLIYOR'
+            """, sonuc, final_ev, final_dep, mac_id)
+    except Exception as e: logger.error(f"Güncelleme Hatası: {e}")
+
+# ================================================
 # KANTİTATİF FİLTRELER (YENİ NESİL)
 # ================================================
-
 def ustel_zaman_asimi(dakika, son_gol):
     """ Golden sonraki şok dalgasını filtreler (Exponential Decay) """
     if son_gol == 0: return 1.0, ""
@@ -148,7 +190,6 @@ def sinyal_hesapla(mac):
     mac_gecmisi[mac_id] = {'atak': suanki_tehlikeli, 'sut': suanki_sut}
     
     # HARD-LOCK KAPI KONTROLÜ (İvme yoksa maçı reddet)
-    # Son periyotta (yaklaşık 7 dk) en az 8 atak veya 1 isabetli şut yoksa kapıdan geçemez.
     if delta_atak < 8 and delta_sut < 1 and dakika > 20:
         return 0, ["HARD LOCK: Son periyotta yeterli ivme yok."], "REJECTED", False
 
@@ -193,7 +234,7 @@ def sinyal_hesapla(mac):
     return puan, detay, strateji_adi, True
 
 # ================================================
-# GEMİNİ AI, TAVSİYE VE SONUÇ KONTROLLERİ (AYNI KALDI)
+# GEMİNİ AI — SEZGİ MOTORU (GÖRÜNMEYENİ OKUMA)
 # ================================================
 def tavsiye_uret(mac, strateji):
     ev_gol, dep_gol = mac.get('ev_gol', 0), mac.get('dep_gol', 0)
@@ -213,11 +254,25 @@ def kasa_hesapla(puan):
 async def gemini_analiz(mac, puan, strateji, tahmin, detay_listesi):
     if not GEMINI_KEY: return "AI analiz aktif değil.", 1.5
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
-    prompt = f"""Sen bir Kantitatif Spor Analistisin. 
+    
+    sistem_raporu = " | ".join(detay_listesi)
+    
+    prompt = f"""Sen elit bir Kantitatif Spor Analistisin. Görevin, kodların ve salt istatistiklerin GÖREMEDİĞİ o "görünmez" dinamikleri ve anormallikleri okumaktır.
+    
 MAÇ: {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']} | LİG: {mac['lig']} | DAKİKA: {mac['dakika']}
-BOT GÖZLEMİ: Son periyotta ölçülen ivme yüksek. Handikap Death Zone tehlikesi yok.
-GÖREV: Bu maçın istatistiksel yığılmasını değil, CANLI DİNAMİĞİNİ tek bir somut detayla yorumla. Klişe yasak.
-YANITIN JSON OLMALI: {{"yorum": "kendi_özgün_yorumun", "gir": true, "kasa": 1.5}}"""
+İSTATİSTİKLER: Şut {mac['shots_on_target_ev']} vs {mac['shots_on_target_dep']}, Top %{mac['possession_ev']}, Atak {mac['dangerous_attacks_ev']} vs {mac['dangerous_attacks_dep']}
+ALGORİTMA RAPORU: {sistem_raporu}
+
+GÖREV: İstatistikler bir şey söylüyor olabilir ama sahada bazen "olması gerekenler olmaz". Görevin, bu sayıların arkasına saklanan yalanı veya gizli gerçeği bulmak. 
+Şunları düşün:
+1. Baskı çok ama gol yoksa, takım skoru mu koruyor yoksa beceriksiz mi?
+2. Deplasman topu rakibe verip bilerek mi pusuya yatmış? İstatistikler ev sahibini şişiriyor olabilir mi?
+3. Beklenen tempoya ulaşılamadıysa oyun kilitlenmiş mi?
+
+Senden sıradan bir "Baskı artmış gol gelebilir" klişesi İSTEMİYORUM. 
+Bana, sadece 2 cümleyle bu istatistiklerin SÖYLEMEDİĞİ o keskin ve çıplak gerçeği söyle. 
+
+YANITIN SADECE JSON OLMALI: {{"yorum": "görünmeyeni_okuyan_keskin_yorumun", "gir": true, "kasa": 1.5}}"""
 
     try:
         payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.7, "maxOutputTokens": 200}}
@@ -230,14 +285,14 @@ YANITIN JSON OLMALI: {{"yorum": "kendi_özgün_yorumun", "gir": true, "kasa": 1.
                     if start_idx != -1 and end_idx != -1:
                         result = json.loads(text[start_idx:end_idx+1])
                         kasa = float(result.get('kasa', 1.5)) if result.get('gir', True) else 0.0
-                        return result.get('yorum', 'Kantitatif ivme devam ediyor.'), kasa
+                        return result.get('yorum', 'Algoritma ivmesi onaylandı.'), kasa
                 return "AI yanıtı alınamadı.", 1.5
     except Exception as e:
         logger.error(f"Gemini Hatası: {e}")
         return "Yapay Zeka servisi şu an meşgul.", 1.5
 
 # ================================================
-# VERİ ÇEKME, BİLDİRİM VE DÖNGÜ (OPTİMİZE EDİLDİ)
+# VERİ ÇEKME, BİLDİRİM VE DÖNGÜ
 # ================================================
 async def bildirim_gonder(bot, mac, puan, detay, strateji, tahmin, ai_yorum, ai_kasa):
     kasa = ai_kasa if ai_kasa is not None else kasa_hesapla(puan)
@@ -258,7 +313,7 @@ async def bildirim_gonder(bot, mac, puan, detay, strateji, tahmin, ai_yorum, ai_
         f"📈 KANTİTATİF PUAN: {puan}/15\n"
         f"📝 ALGORİTMA RAPORU:\n{detay_str}\n"
         f"────────────────────\n"
-        f"🧠 AI STRATEJİSTİ:\n{ai_yorum}\n"
+        f"🧠 AI SEZGİ MOTORU:\n{ai_yorum}\n"
         f"────────────────────\n"
         f"💡 POZİSYON: {tahmin}\n"
         f"💰 KASA RİSKİ: %{kasa}\n"
@@ -266,6 +321,7 @@ async def bildirim_gonder(bot, mac, puan, detay, strateji, tahmin, ai_yorum, ai_
     )
     try:
         await bot.send_message(chat_id=CHAT_ID, text=mesaj)
+        await sinyal_kaydet(mac, puan, strateji, tahmin, ai_yorum, kasa)
     except Exception as e: logger.error(f"Bildirim Hatası: {e}")
 
 async def maclari_cek():
@@ -309,7 +365,7 @@ async def maclari_cek():
                             mac['son_gol'] = son_gol
                             
                             maclar.append(mac)
-    except Exception as e: logger.error(f"Mac Cekme Hatasi: {e}")
+    except Exception as e: logger.error(f"Mac Çekme Hatası: {e}")
     return maclar
 
 async def odds_cek(fixture_ids):
@@ -352,6 +408,7 @@ async def sonuc_bildir(bot, ev, dep, tahmin, sonuc, fin_ev, fin_dep):
 async def ana_dongu():
     threading.Thread(target=run_health_check, daemon=True).start()
     bot = Bot(token=TELEGRAM_TOKEN)
+    await db_baglant()
     
     simdi = datetime.now()
     gun_str = "Hafta Sonu" if simdi.weekday() >= 5 else "Hafta İçi"
@@ -363,6 +420,7 @@ async def ana_dongu():
         "✅ AH Death Zone (Skor Koruma Blokajı)\n"
         "✅ 4578X Premium Artefakt Sömürüsü\n"
         "✅ Yeni Altın Pencere (65-75')\n"
+        "✅ Sezgi Motoru (Gemini AI)\n"
         "✅ Nesine Bülten Filtresi\n"
         "✅ Sonuç ve Kayıp Takibi\n\n"
         f"📅 Mod: {gun_str}\n"
@@ -417,7 +475,7 @@ async def ana_dongu():
                     bildirim_gonderilen[mac['id']] = {'puan': puan, 'tahmin': tahmin, 'ev_gol': mac['ev_gol'], 'dep_gol': mac['dep_gol']}
 
         except Exception as e: logger.error(f"Döngü Hatası: {e}")
-        await asyncio.sleep(600) # 10 Dakika bekle (Rolling Window bu farkı ölçecek)
+        await asyncio.sleep(420) # 7 Dakika bekle (Rolling Window bu farkı ölçecek)
 
 if __name__ == "__main__":
     asyncio.run(ana_dongu())
