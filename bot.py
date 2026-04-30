@@ -1,6 +1,6 @@
 """
 MAC ANALIZ BOTU - KANTİTATİF SÜRÜM (V2.0 HFT MODELİ)
-Özellikler: Rolling Window, Exponential Decay, AH Death Zone Filter, Artifact Exploit, Sezgi Motoru (Gemini 2.0 Flash PRO)
+Özellikler: Rolling Window, Exponential Decay, AH Death Zone Filter, Rate Limiting, Sezgi Motoru (Gemini 1.5 Flash)
 """
 
 import asyncio
@@ -245,8 +245,8 @@ async def gemini_analiz(mac, puan, strateji, tahmin, detay_listesi):
     if not GEMINI_KEY: 
         return "AI analiz aktif değil (API Key Yok).", 1.5
         
-    # PRO sürümü için doğrudan 2.0-flash kullanımı
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
+    # KOTA SORUNUNU AŞMAK İÇİN GEMINI 1.5 FLASH SÜRÜMÜNE SABİTLENDİ
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
     
     sistem_raporu = " | ".join(detay_listesi)
     
@@ -280,7 +280,6 @@ YANITIN SADECE JSON OLMALI: {{"yorum": "görünmeyeni_okuyan_keskin_yorumun", "g
                         kasa = float(result.get('kasa', 1.5)) if result.get('gir', True) else 0.0
                         return result.get('yorum', 'Algoritma ivmesi onaylandı.'), kasa
                 else:
-                    # Google reddederse Railway loglarına gerçek hatayı yazdıracak
                     error_text = await resp.text()
                     logger.error(f"Gemini API Reddedildi ({resp.status}): {error_text}")
                     return "AI sunucusu yanıt vermedi.", 1.5
@@ -417,7 +416,8 @@ async def ana_dongu():
         "✅ AH Death Zone (Skor Koruma Blokajı)\n"
         "✅ 4578X Premium Artefakt Sömürüsü\n"
         "✅ Yeni Altın Pencere (65-75')\n"
-        "✅ Sezgi Motoru (Gemini 2.0 Flash)\n"
+        "✅ Sezgi Motoru (Gemini 1.5 Flash)\n"
+        "✅ AI Rate Limit Koruması Aktif (Nefes Payı)\n"
         "✅ Nesine Bülten Filtresi\n"
         "✅ Sonuç ve Kayıp Takibi\n\n"
         "⏰ Zamanlama:\n"
@@ -472,6 +472,9 @@ async def ana_dongu():
                     
                     await bildirim_gonder(bot, mac, puan, detay, strateji, tahmin, ai_yorum, ai_kasa)
                     bildirim_gonderilen[mac['id']] = {'puan': puan, 'tahmin': tahmin, 'ev_gol': mac['ev_gol'], 'dep_gol': mac['dep_gol']}
+                    
+                    # GOOGLE API RATE LIMIT KORUMASI: Spam filtresine takılmamak için her mesaj arasına 4 saniye nefes payı
+                    await asyncio.sleep(4)
 
         except Exception as e: 
             logger.error(f"Döngü Hatası: {e}")
