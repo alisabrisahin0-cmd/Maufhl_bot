@@ -5,14 +5,13 @@ MAC ANALIZ BOTU - KANTİTATİF SÜRÜM (V2.0 HFT MODELİ)
 
 import asyncio
 import aiohttp
+from aiohttp import web
 from telegram import Bot
 import logging
 import os
 import asyncpg
 from datetime import datetime
 import json
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # ================================================
 # ÇEVRE DEĞİŞKENLERİ VE KURULUM
@@ -22,7 +21,7 @@ CHAT_ID = os.getenv("CHAT_ID", "")
 APISPORTS_KEY = os.getenv("APISPORTS_KEY", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 GEMINI_KEY = os.getenv("GEMINI_KEY", "")
-MIN_PUAN = int(os.getenv("MIN_PUAN", "8"))
+MIN_PUAN = int(os.getenv("MIN_PUAN", "8")) 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -39,18 +38,20 @@ API_HEADERS = {
 BASE_URL = "https://v3.football.api-sports.io"
 
 # ================================================
-# RAILWAY KORUMASI (HEALTH CHECK)
+# RAILWAY KORUMASI (YENİ NESİL AIOHTTP SUNUCU)
 # ================================================
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot Aktif")
+async def health_check(request):
+    return web.Response(text="Bot Aktif ve Avlaniyor")
 
-def run_health_check():
+async def init_web_server():
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    server.serve_forever()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logger.info(f"Railway web sunucusu {port} portunda başlatıldı. Kapanma engellendi.")
 
 # ================================================
 # NESİNE FİLTRESİ
@@ -69,7 +70,7 @@ def nesine_kontrol(lig_adi):
     return "🟡 DİĞER BÜLTEN"
 
 # ================================================
-# ZAMAN YÖNETİMİ (16:00 OLARAK GÜNCELLENDİ)
+# ZAMAN YÖNETİMİ (16:00 BAŞLANGIÇ)
 # ================================================
 def aktif_mi():
     simdi = datetime.now()
@@ -395,7 +396,7 @@ async def sonuc_bildir(bot, ev, dep, tahmin, sonuc, fin_ev, fin_dep):
     except: pass
 
 async def ana_dongu():
-    threading.Thread(target=run_health_check, daemon=True).start()
+    await init_web_server() # YENİ NESİL SUNUCU BAŞLATILIYOR (KAPANMA ENGELLENDİ)
     bot = Bot(token=TELEGRAM_TOKEN)
     await db_baglant()
     
@@ -424,7 +425,7 @@ async def ana_dongu():
     while True:
         try:
             if not aktif_mi():
-                await asyncio.sleep(1800)
+                await asyncio.sleep(60) # 1 DAKİKADA BİR SAATİ KONTROL EDER (Railway Çökmesin Diye)
                 continue
 
             maclar = await maclari_cek()
@@ -465,8 +466,10 @@ async def ana_dongu():
                     await bildirim_gonder(bot, mac, puan, detay, strateji, tahmin, ai_yorum, ai_kasa)
                     bildirim_gonderilen[mac['id']] = {'puan': puan, 'tahmin': tahmin, 'ev_gol': mac['ev_gol'], 'dep_gol': mac['dep_gol']}
 
-        except Exception as e: logger.error(f"Döngü Hatası: {e}")
-        await asyncio.sleep(600)
+        except Exception as e: 
+            logger.error(f"Döngü Hatası: {e}")
+            
+        await asyncio.sleep(600) # SENİN İSTEDİĞİN GİBİ 10 DAKİKA (600 SN) BEKLEME
 
 if __name__ == "__main__":
     asyncio.run(ana_dongu())
