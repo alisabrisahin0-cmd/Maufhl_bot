@@ -167,7 +167,7 @@ async def sonuc_bildir(bot, mac_id, ev, dep, tahmin, sonuc, fin_ev, fin_dep):
         logger.error(f"Sonuç Bildirimi Hatası: {e}")
 
 # ================================================
-# WINNING CODE & STRATEJİLER (Senin Orijinal Mantığın)
+# WINNING CODE & STRATEJİLER
 # ================================================
 def winning_code_kontrol(mac):
     shots_ev = mac.get('shots_on_target_ev', 0)
@@ -410,7 +410,28 @@ async def ana_dongu():
     bot = Bot(token=TELEGRAM_TOKEN)
     await db_baglant()
     
-    await bot.send_message(chat_id=CHAT_ID, text="🤖 MÜKEMMEL SİSTEM BOTU AKTİF\n✅ Nesine Filtresi\n✅ Gemini AI Analizi\n✅ Tahmin Tuttu/Kaybetti Takibi\n\nMaç taraması başlatılıyor...")
+    simdi = datetime.now()
+    gun_str = "Hafta Sonu" if simdi.weekday() >= 5 else "Hafta İçi"
+    
+    mesaj = (
+        "🤖 MAÇ ANALİZ BOTU — MÜKEMMEL SİSTEM\n\n"
+        "✅ Winning Code (VU/TÜM/MA/DİYİ)\n"
+        "✅ Altın Pencere Bonusları\n"
+        "✅ Beraberlik & Value Bonusu\n"
+        "✅ Asian Handicap Entegrasyonu\n"
+        "✅ Corner Eşikleri\n"
+        "✅ Cooling Off Koruması\n"
+        "✅ Gemini AI Derin Analiz\n"
+        "✅ Nesine Bülten Filtresi\n"
+        "✅ Tahmin Tuttu/Kaybetti Takibi\n\n"
+        "⏰ Zamanlama:\n"
+        "Hafta İçi: 19:00 — 00:00\n"
+        "Hafta Sonu: 19:00 — 23:00\n\n"
+        f"📅 Şu an: {gun_str} modu\n"
+        f"🎯 Min puan: {MIN_PUAN}/12\n\n"
+        "Hazır! Sinyaller gelince bildirim atacağım 🚀"
+    )
+    await bot.send_message(chat_id=CHAT_ID, text=mesaj)
     
     while True:
         try:
@@ -424,7 +445,6 @@ async def ana_dongu():
             # BİTEN MAÇLARI KONTROL ET VE SONUÇ BİLDİR
             for mac_id, bilgi in list(biten_maclar.items()):
                 if mac_id not in aktif_idler:
-                    # Maç canlıdan düştü, sonucu hesapla ve gönder
                     sonuc = sonuc_kontrol(bilgi['tahmin'], bilgi['bas_ev'], bilgi['bas_dep'], bilgi['son_ev'], bilgi['son_dep'])
                     await sonuc_bildir(bot, mac_id, bilgi['ev'], bilgi['dep'], bilgi['tahmin'], sonuc, bilgi['son_ev'], bilgi['son_dep'])
                     del biten_maclar[mac_id]
@@ -434,7 +454,6 @@ async def ana_dongu():
                 mac_id = mac['id']
                 puan, detay, strateji, wc = sinyal_hesapla(mac)
 
-                # Takip listesini her döngüde güncel skorla besle ki canlıdan düşünce son skoru bilelim
                 if mac_id in bildirim_gonderilen:
                     biten_maclar[mac_id] = {
                         'ev': mac['ev'], 'dep': mac['dep'],
@@ -460,7 +479,7 @@ async def ana_dongu():
                     bildirim_gonderilen[mac['id']] = {'puan': puan, 'tahmin': tahmin, 'ev_gol': mac['ev_gol'], 'dep_gol': mac['dep_gol']}
 
         except Exception as e: logger.error(f"Döngü Hatası: {e}")
-        await asyncio.sleep(600) # 10 dakika bekle
+        await asyncio.sleep(420) # 7 dakika bekle
 
 if __name__ == "__main__":
     asyncio.run(ana_dongu())
