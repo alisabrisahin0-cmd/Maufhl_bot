@@ -22,7 +22,7 @@ CHAT_ID = os.getenv("CHAT_ID", "")
 APISPORTS_KEY = os.getenv("APISPORTS_KEY", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 GEMINI_KEY = os.getenv("GEMINI_KEY", "")
-MIN_PUAN = int(os.getenv("MIN_PUAN", "8")) # Filtreler güçlendiği için min puan eşiği artırıldı
+MIN_PUAN = int(os.getenv("MIN_PUAN", "8"))
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -69,16 +69,16 @@ def nesine_kontrol(lig_adi):
     return "🟡 DİĞER BÜLTEN"
 
 # ================================================
-# ZAMAN YÖNETİMİ
+# ZAMAN YÖNETİMİ (16:00 OLARAK GÜNCELLENDİ)
 # ================================================
 def aktif_mi():
     simdi = datetime.now()
     saat = simdi.hour
     gun = simdi.weekday()
     if gun <= 4:
-        return 19 <= saat <= 23
+        return 16 <= saat <= 23
     else:
-        return 19 <= saat <= 22
+        return 16 <= saat <= 22
 
 # ================================================
 # VERİTABANI BAĞLANTISI
@@ -127,7 +127,6 @@ async def sonuc_guncelle(mac_id, sonuc, final_ev, final_dep):
 # KANTİTATİF FİLTRELER (YENİ NESİL)
 # ================================================
 def ustel_zaman_asimi(dakika, son_gol):
-    """ Golden sonraki şok dalgasını filtreler (Exponential Decay) """
     if son_gol == 0: return 1.0, ""
     fark = dakika - son_gol
     
@@ -138,7 +137,6 @@ def ustel_zaman_asimi(dakika, son_gol):
     return 1.0, ""
 
 def death_zone_kontrol(ah_deger, ev_gol, dep_gol):
-    """ -0.75 ve -0.50 Ölüm Bölgesinde (Skora yatma) filtreleme """
     gol_fark = ev_gol - dep_gol
     if -1.0 <= ah_deger <= -0.5 and gol_fark == 1:
         return True, "DEATH ZONE: Favori ev sahibi 1 farkla önde, oyun kilitlenebilir."
@@ -147,7 +145,6 @@ def death_zone_kontrol(ah_deger, ev_gol, dep_gol):
     return False, ""
 
 def premium_artefakt_kontrol(mac):
-    """ API'deki 4578X metadata hatasını (Market ID) Likidite göstergesi olarak kullanır """
     cev = mac.get('corner_ev', 0)
     cdep = mac.get('corner_dep', 0)
     if cev > 1000 or cdep > 1000:
@@ -169,7 +166,6 @@ def sinyal_hesapla(mac):
     detay = []
     stratejiler = []
     
-    # 1. KANTİTATİF KONTROLLER
     decay_carpan, decay_mesaj = ustel_zaman_asimi(dakika, son_gol)
     if decay_carpan == 0.0:
         return 0, [decay_mesaj], "BLOCKED", False
@@ -178,7 +174,6 @@ def sinyal_hesapla(mac):
     if dz_aktif:
         return 0, [dz_mesaj], "DEATH_ZONE", False
 
-    # 2. KAYAN PENCERE (ROLLING WINDOW) HESAPLAMASI
     suanki_tehlikeli = mac.get('dangerous_attacks_ev', 0) + mac.get('dangerous_attacks_dep', 0)
     suanki_sut = mac.get('shots_on_target_ev', 0) + mac.get('shots_on_target_dep', 0)
     
@@ -186,17 +181,14 @@ def sinyal_hesapla(mac):
     delta_atak = max(0, suanki_tehlikeli - gecmis['atak'])
     delta_sut = max(0, suanki_sut - gecmis['sut'])
     
-    # Geçmişi Güncelle
     mac_gecmisi[mac_id] = {'atak': suanki_tehlikeli, 'sut': suanki_sut}
     
-    # HARD-LOCK KAPI KONTROLÜ (İvme yoksa maçı reddet)
     if delta_atak < 8 and delta_sut < 1 and dakika > 20:
         return 0, ["HARD LOCK: Son periyotta yeterli ivme yok."], "REJECTED", False
 
     detay.append(f"✅ KAPI GEÇİLDİ: Son periyot ivmesi (Atak: +{delta_atak}, Şut: +{delta_sut})")
-    puan += 4.0 # Kapı geçiş taban puanı
+    puan += 4.0
 
-    # 3. BÜYÜKLÜK ÖLÇEKLENDİRMESİ (Magnitude)
     sut_puani = suanki_sut * 0.5
     puan += sut_puani
     detay.append(f"🎯 Şut Şiddeti: {suanki_sut} isabetli şut (+{sut_puani} Puan)")
@@ -206,7 +198,6 @@ def sinyal_hesapla(mac):
         detay.append(f"🌪️ Ani Baskı İvmesi! (+2.0 Puan)")
         stratejiler.append("YUKSEK_IVME")
 
-    # 4. YENİ ZAMAN PENCERELERİ
     if 65 <= dakika <= 75:
         puan += 3.5
         detay.append("🔥 Kırılma Penceresi (65-75') +3.5")
@@ -216,13 +207,11 @@ def sinyal_hesapla(mac):
         detay.append("⚡ Agresif Açılış (7-15') +2.0")
         stratejiler.append("ERKEN_ACILIS")
 
-    # 5. ARTEFAKT SÖMÜRÜSÜ
     artefakt_puan, art_mesaj = premium_artefakt_kontrol(mac)
     if artefakt_puan > 0:
         puan += artefakt_puan
         detay.append(art_mesaj)
 
-    # Lig Katsayısı ve Decay Çarpanı Uygulama
     LIG_KATSAYISI = {'Eredivisie': 1.3, 'Bundesliga': 1.2, 'Premier League': 1.15, 'Champions League': 1.1}
     lig_katsayisi = next((katsayi for lig_adi, katsayi in LIG_KATSAYISI.items() if lig_adi.lower() in mac.get('lig', '').lower()), 1.0)
     
@@ -423,6 +412,9 @@ async def ana_dongu():
         "✅ Sezgi Motoru (Gemini AI)\n"
         "✅ Nesine Bülten Filtresi\n"
         "✅ Sonuç ve Kayıp Takibi\n\n"
+        "⏰ Zamanlama:\n"
+        "Hafta İçi: 16:00 — 00:00\n"
+        "Hafta Sonu: 16:00 — 23:00\n\n"
         f"📅 Mod: {gun_str}\n"
         f"🎯 Min Puan Eşiği: {MIN_PUAN}\n\n"
         "HFT (Yüksek Frekanslı) Algoritma devrede. Av başlıyor 🚀"
@@ -455,7 +447,6 @@ async def ana_dongu():
                         'son_ev': mac['ev_gol'], 'son_dep': mac['dep_gol'],
                     }
 
-            # Adayları belirlemeden önce AH oranlarını çekelim ki Death Zone filtresi çalışsın
             tum_odds = await odds_cek(aktif_idler)
             for mac in maclar:
                 if mac['id'] in tum_odds:
@@ -475,7 +466,7 @@ async def ana_dongu():
                     bildirim_gonderilen[mac['id']] = {'puan': puan, 'tahmin': tahmin, 'ev_gol': mac['ev_gol'], 'dep_gol': mac['dep_gol']}
 
         except Exception as e: logger.error(f"Döngü Hatası: {e}")
-        await asyncio.sleep(420) # 7 Dakika bekle (Rolling Window bu farkı ölçecek)
+        await asyncio.sleep(420)
 
 if __name__ == "__main__":
     asyncio.run(ana_dongu())
