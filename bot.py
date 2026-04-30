@@ -13,14 +13,13 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID = os.getenv("CHAT_ID", "")
 APISPORTS_KEY = os.getenv("APISPORTS_KEY", "")
 
-# 3 ANAHTARI BURAYA LİSTE OLARAK EKLEDİK
+# 3 ANAHTAR
 GEMINI_KEYS = [
     os.getenv("GEMINI_KEY_1", ""),
     os.getenv("GEMINI_KEY_2", ""),
     os.getenv("GEMINI_KEY_3", "")
 ]
 
-# TEST İÇİN BARAJI GEÇİCİ OLARAK 5'E DÜŞÜRDÜK (Telegram'a mesaj düşsün diye)
 MIN_PUAN = 5 
 current_key_index = 0 
 
@@ -30,7 +29,7 @@ logger = logging.getLogger(__name__)
 bildirim_gonderilen = {}
 
 # ================================================
-# AI ANALİZ MOTORU (HAVUZ SİSTEMİ)
+# AI ANALİZ MOTORU
 # ================================================
 async def gemini_analiz_havuzu(mac_data):
     global current_key_index
@@ -55,16 +54,15 @@ async def gemini_analiz_havuzu(mac_data):
                         res = json.loads(text[text.find('{'):text.rfind('}')+1])
                         return res.get('yorum', 'Sistem onayladı.'), res.get('kasa', 1.5)
                     elif resp.status == 429: 
-                        logger.warning(f"AI Key {current_key_index+1} limiti doldu, havuzdaki diğer key'e geçiliyor...")
                         current_key_index = (current_key_index + 1) % len(valid_keys)
-        except Exception as e:
+        except Exception:
             current_key_index = (current_key_index + 1) % len(valid_keys)
         await asyncio.sleep(1) 
     
     return "Tüm AI kanalları denendi, yanıt alınamadı.", 1.5
 
 # ================================================
-# PUANLAMA MANTIĞI
+# PUANLAMA
 # ================================================
 def sinyal_hesapla(mac_stats):
     puan = 2.0
@@ -73,16 +71,22 @@ def sinyal_hesapla(mac_stats):
     
     puan += (sut * 1.5)
     if atak > 30: puan += 1.5
-    puan += 3.0 # Standart oran baskısı
-    
+    puan += 3.0
     return round(puan, 1)
 
 # ================================================
-# ANA DÖNGÜ (LOGLAMALI)
+# ANA DÖNGÜ (TELEGRAM AÇILIŞ MESAJI EKLENDİ)
 # ================================================
 async def maclari_tara(bot):
-    logger.info("🟢 BOT BAŞARIYLA UYANDI! 3 AI Motoru Aktif. Telegram test ediliyor...")
-    
+    # 1. TELEGRAM BAĞLANTI TESTİ (SİSTEM BAŞLAMA MESAJI)
+    try:
+        baslangic_mesaji = "🟢 SİSTEM AKTİF! 3 AI Motoru devrede. Piyasada maç aranıyor..."
+        await bot.send_message(chat_id=CHAT_ID, text=baslangic_mesaji)
+        logger.info("✅ Telegram'a başlangıç mesajı başarıyla atıldı!")
+    except Exception as e:
+        logger.error(f"❌ TELEGRAM HATASI (Token veya Chat ID yanlış): {e}")
+
+    # 2. NORMAL MAÇ TARAMA DÖNGÜSÜ
     while True:
         try:
             async with aiohttp.ClientSession() as session:
@@ -91,7 +95,7 @@ async def maclari_tara(bot):
                     data = await resp.json()
                     maclar = data.get('response', [])
                     
-                    logger.info(f"🔍 API'den canlı veri çekildi. Şu an {len(maclar)} maç oynanıyor. Tarama yapılıyor...")
+                    logger.info(f"🔍 Canlı veri çekildi. Şu an {len(maclar)} maç oynanıyor.")
                     
                     for f in maclar:
                         m_id = str(f['fixture']['id'])
@@ -123,12 +127,10 @@ async def maclari_tara(bot):
                                 f"🧠 AI: {ai_y}"
                             )
                             await bot.send_message(CHAT_ID, msg)
-                            logger.info(f"✅ Telegram'a mesaj başarıyla gönderildi: {mac_info['ev']} maçı.")
                             bildirim_gonderilen[m_id] = True
                             await asyncio.sleep(4)
         except Exception as e: logger.error(f"Hata Döngüsü: {e}")
         
-        logger.info("⏳ 10 dakika bekleniyor...")
         await asyncio.sleep(600)
 
 async def main():
