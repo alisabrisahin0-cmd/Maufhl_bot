@@ -1,6 +1,6 @@
 """
 MAC ANALIZ BOTU - KANTİTATİF SÜRÜM (V2.0 HFT MODELİ)
-Özellikler: Rolling Window, Exponential Decay, AH Death Zone Filter, Artifact Exploit, Sezgi Motoru (AI 1.5-Flash)
+Özellikler: Rolling Window, Exponential Decay, AH Death Zone Filter, Artifact Exploit, Sezgi Motoru (Gemini 2.0 Flash PRO)
 """
 
 import asyncio
@@ -245,8 +245,8 @@ async def gemini_analiz(mac, puan, strateji, tahmin, detay_listesi):
     if not GEMINI_KEY: 
         return "AI analiz aktif değil (API Key Yok).", 1.5
         
-    # Modeli en stabil ve hızlı sürüm olan 1.5-flash'a çektik
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+    # PRO sürümü için doğrudan 2.0-flash kullanımı
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
     
     sistem_raporu = " | ".join(detay_listesi)
     
@@ -417,7 +417,7 @@ async def ana_dongu():
         "✅ AH Death Zone (Skor Koruma Blokajı)\n"
         "✅ 4578X Premium Artefakt Sömürüsü\n"
         "✅ Yeni Altın Pencere (65-75')\n"
-        "✅ Sezgi Motoru (Gemini AI)\n"
+        "✅ Sezgi Motoru (Gemini 2.0 Flash)\n"
         "✅ Nesine Bülten Filtresi\n"
         "✅ Sonuç ve Kayıp Takibi\n\n"
         "⏰ Zamanlama:\n"
