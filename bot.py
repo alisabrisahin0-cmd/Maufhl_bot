@@ -1,6 +1,6 @@
 """
 MAC ANALIZ BOTU - KANTİTATİF SÜRÜM (V2.0 HFT MODELİ)
-Özellikler: Rolling Window, Exponential Decay, AH Death Zone Filter, Rate Limiting, Sezgi Motoru (Gemini 1.5 Flash)
+Özellikler: Özel Zamanlama (Perşembe 10-00, H.Sonu 18-00), Gemini 1.5 Flash, Rate Limiting
 """
 
 import asyncio
@@ -41,7 +41,7 @@ BASE_URL = "https://v3.football.api-sports.io"
 # RAILWAY KORUMASI (YENİ NESİL AIOHTTP SUNUCU)
 # ================================================
 async def health_check(request):
-    return web.Response(text="Bot Aktif ve Avlaniyor")
+    return web.Response(text="Bot Aktif, Ozel Zamanlamaya Gore Avlaniyor")
 
 async def init_web_server():
     app = web.Application()
@@ -70,16 +70,19 @@ def nesine_kontrol(lig_adi):
     return "🟡 DİĞER BÜLTEN"
 
 # ================================================
-# ZAMAN YÖNETİMİ (16:00 BAŞLANGIÇ)
+# ZAMAN YÖNETİMİ (ÖZEL PLANLAMA)
 # ================================================
 def aktif_mi():
     simdi = datetime.now()
     saat = simdi.hour
-    gun = simdi.weekday()
-    if gun <= 4:
-        return 16 <= saat <= 23
-    else:
-        return 16 <= saat <= 22
+    gun = simdi.weekday() # 0: Pzt, 1: Salı, 2: Çarş, 3: Perş, 4: Cuma, 5: Cts, 6: Pazar
+    
+    if gun == 3: # PERŞEMBE (Bugün)
+        return 10 <= saat <= 23
+    elif gun in [4, 5, 6]: # CUMA, CUMARTESİ, PAZAR
+        return 18 <= saat <= 23
+    else: # PAZARTESİ, SALI, ÇARŞAMBA
+        return False
 
 # ================================================
 # VERİTABANI BAĞLANTISI
@@ -245,7 +248,6 @@ async def gemini_analiz(mac, puan, strateji, tahmin, detay_listesi):
     if not GEMINI_KEY: 
         return "AI analiz aktif değil (API Key Yok).", 1.5
         
-    # KOTA SORUNUNU AŞMAK İÇİN GEMINI 1.5 FLASH SÜRÜMÜNE SABİTLENDİ
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
     
     sistem_raporu = " | ".join(detay_listesi)
@@ -402,28 +404,24 @@ async def sonuc_bildir(bot, ev, dep, tahmin, sonuc, fin_ev, fin_dep):
     except: pass
 
 async def ana_dongu():
-    await init_web_server() # YENİ NESİL SUNUCU BAŞLATILIYOR (KAPANMA ENGELLENDİ)
+    await init_web_server() 
     bot = Bot(token=TELEGRAM_TOKEN)
     await db_baglant()
-    
-    simdi = datetime.now()
-    gun_str = "Hafta Sonu" if simdi.weekday() >= 5 else "Hafta İçi"
     
     mesaj = (
         "🤖 KANTİTATİF ANALİZ BOTU V2.0\n\n"
         "✅ Rolling Window (Kayan Pencere İvmesi)\n"
         "✅ Exponential Decay (Üstel Soğuma Filtresi)\n"
         "✅ AH Death Zone (Skor Koruma Blokajı)\n"
-        "✅ 4578X Premium Artefakt Sömürüsü\n"
         "✅ Yeni Altın Pencere (65-75')\n"
         "✅ Sezgi Motoru (Gemini 1.5 Flash)\n"
         "✅ AI Rate Limit Koruması Aktif (Nefes Payı)\n"
         "✅ Nesine Bülten Filtresi\n"
         "✅ Sonuç ve Kayıp Takibi\n\n"
-        "⏰ Zamanlama:\n"
-        "Hafta İçi: 16:00 — 00:00\n"
-        "Hafta Sonu: 16:00 — 23:00\n\n"
-        f"📅 Mod: {gun_str}\n"
+        "⏰ ZAMANLAMA GÜNCELLEMESİ:\n"
+        "Perşembe (Bugün): 10:00 — 00:00\n"
+        "Cuma, Cts, Pazar: 18:00 — 00:00\n"
+        "Pzt - Çarşamba: Uyku Modu (Kapalı)\n\n"
         f"🎯 Min Puan Eşiği: {MIN_PUAN}\n\n"
         "HFT (Yüksek Frekanslı) Algoritma devrede. Av başlıyor 🚀"
     )
@@ -432,7 +430,7 @@ async def ana_dongu():
     while True:
         try:
             if not aktif_mi():
-                await asyncio.sleep(60) # 1 DAKİKADA BİR SAATİ KONTROL EDER (Railway Çökmesin Diye)
+                await asyncio.sleep(60) # Eğer çalışma saatinde değilsek 1 dakika uyumaya devam et.
                 continue
 
             maclar = await maclari_cek()
@@ -473,13 +471,12 @@ async def ana_dongu():
                     await bildirim_gonder(bot, mac, puan, detay, strateji, tahmin, ai_yorum, ai_kasa)
                     bildirim_gonderilen[mac['id']] = {'puan': puan, 'tahmin': tahmin, 'ev_gol': mac['ev_gol'], 'dep_gol': mac['dep_gol']}
                     
-                    # GOOGLE API RATE LIMIT KORUMASI: Spam filtresine takılmamak için her mesaj arasına 4 saniye nefes payı
                     await asyncio.sleep(4)
 
         except Exception as e: 
             logger.error(f"Döngü Hatası: {e}")
             
-        await asyncio.sleep(600) # SENİN İSTEDİĞİN GİBİ 10 DAKİKA (600 SN) BEKLEME
+        await asyncio.sleep(600) 
 
 if __name__ == "__main__":
     asyncio.run(ana_dongu())
