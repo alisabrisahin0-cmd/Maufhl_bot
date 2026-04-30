@@ -466,7 +466,7 @@ async def ana_dongu():
                     bildirim_gonderilen[mac['id']] = {'puan': puan, 'tahmin': tahmin, 'ev_gol': mac['ev_gol'], 'dep_gol': mac['dep_gol']}
 
         except Exception as e: logger.error(f"Döngü Hatası: {e}")
-        await asyncio.sleep(420)
+        await asyncio.sleep(600)
 
 if __name__ == "__main__":
     asyncio.run(ana_dongu())
