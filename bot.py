@@ -1,6 +1,6 @@
 """
 MAC ANALIZ BOTU - KANTİTATİF SÜRÜM (V2.0 HFT MODELİ)
-Özellikler: Rolling Window, Exponential Decay, AH Death Zone Filter, Artifact Exploit, Sezgi Motoru (AI)
+Özellikler: Rolling Window, Exponential Decay, AH Death Zone Filter, Artifact Exploit, Sezgi Motoru (AI 1.5-Flash)
 """
 
 import asyncio
@@ -242,8 +242,11 @@ def kasa_hesapla(puan):
     return 1.5
 
 async def gemini_analiz(mac, puan, strateji, tahmin, detay_listesi):
-    if not GEMINI_KEY: return "AI analiz aktif değil.", 1.5
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
+    if not GEMINI_KEY: 
+        return "AI analiz aktif değil (API Key Yok).", 1.5
+        
+    # Modeli en stabil ve hızlı sürüm olan 1.5-flash'a çektik
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
     
     sistem_raporu = " | ".join(detay_listesi)
     
@@ -276,10 +279,14 @@ YANITIN SADECE JSON OLMALI: {{"yorum": "görünmeyeni_okuyan_keskin_yorumun", "g
                         result = json.loads(text[start_idx:end_idx+1])
                         kasa = float(result.get('kasa', 1.5)) if result.get('gir', True) else 0.0
                         return result.get('yorum', 'Algoritma ivmesi onaylandı.'), kasa
-                return "AI yanıtı alınamadı.", 1.5
+                else:
+                    # Google reddederse Railway loglarına gerçek hatayı yazdıracak
+                    error_text = await resp.text()
+                    logger.error(f"Gemini API Reddedildi ({resp.status}): {error_text}")
+                    return "AI sunucusu yanıt vermedi.", 1.5
     except Exception as e:
         logger.error(f"Gemini Hatası: {e}")
-        return "Yapay Zeka servisi şu an meşgul.", 1.5
+        return "Yapay Zeka servisine ulaşılamadı.", 1.5
 
 # ================================================
 # VERİ ÇEKME, BİLDİRİM VE DÖNGÜ
