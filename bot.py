@@ -311,7 +311,7 @@ async def ana_dongu():
         "✅ Kaos Sınırı (5+ Gol) Bloğu\n"
         "✅ İkinci Yarı Momentum Tabanı (10 Atak)\n"
         "✅ Premium BetsAPI (0 Gecikme) Motoru\n\n"
-        "🕒 Mesai: 14:00 - 23:59\n"
+        "🕒 Mesai: 13:00 - 23:59\n"
         f"🎯 Min Puan Eşiği: {MIN_PUAN}\n\n"
         "Profesyonel Algoritma Ava Çıktı! 🚀"
     )
