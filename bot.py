@@ -1,6 +1,6 @@
 """
-V6.2 SNIPER QUANT MASTER - RELAXED ENGINE
-Özellikler: Genişletilmiş Skor Filtresi (1-1, 2-0 vb.), Esnek Zaman Penceresi (25-65), Yumuşatılmış İvme (Delta 7)
+V6.2 SNIPER QUANT MASTER - RELAXED ENGINE (ULTIMATE FIX)
+Özellikler: Türkiye Saati (UTC+3), Aktif Loglar, Esnek Filtreler (25-65 Dk, 1-1 Skor Eklentisi)
 """
 
 import asyncio
@@ -20,7 +20,6 @@ CHAT_ID = os.getenv("CHAT_ID", "")
 BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
 GEMINI_KEYS = [os.getenv("GEMINI_KEY_1", ""), os.getenv("GEMINI_KEY_2", ""), os.getenv("GEMINI_KEY_3", "")]
 
-# Keskin nişancı barajı
 MIN_PUAN = float(os.getenv("MIN_PUAN", "7.0"))
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -35,10 +34,13 @@ bildirim_gonderilen = {}
 TTL_MINUTES = 120
 
 def cleanup_memory():
-    now = datetime.now()
-    for store in [mac_gecmisi, gol_hafizasi, bildirim_gonderilen]:
-        silinecek = [k for k, v in store.items() if isinstance(v, dict) and "time" in v and now - v["time"] > timedelta(minutes=TTL_MINUTES)]
-        for k in silinecek: del store[k]
+    try:
+        now = datetime.now()
+        for store in [mac_gecmisi, gol_hafizasi, bildirim_gonderilen]:
+            silinecek = [k for k, v in store.items() if isinstance(v, dict) and "time" in v and now - v["time"] > timedelta(minutes=TTL_MINUTES)]
+            for k in silinecek: del store[k]
+    except Exception as e:
+        logger.error(f"Hafıza Temizleme Hatası: {e}")
 
 # ================================================
 # SAĞLIK KONTROLÜ (RAILWAY)
@@ -55,7 +57,7 @@ def run_health_check():
     server.serve_forever()
 
 # ================================================
-# FİLTRELER VE MESAİ
+# FİLTRELER VE TÜRKİYE SAATİ MESAİSİ
 # ================================================
 NESINE_LIGLERI = ['Super Lig', '1. Lig', 'Premier League', 'Championship', 'La Liga', 'Serie A', 'Bundesliga', 'Ligue 1', 'Eredivisie']
 
@@ -63,13 +65,14 @@ def nesine_kontrol(lig_adi):
     return "🟢 NESİNE BÜLTENİ" if any(lig.lower() in lig_adi.lower() for lig in NESINE_LIGLERI) else "🟡 DİĞER BÜLTEN"
 
 def aktif_mi():
-    saat = datetime.now().hour
+    # Railway UTC çalışır, Türkiye saati için 3 saat ekliyoruz (UTC+3)
+    simdi_tr = datetime.utcnow() + timedelta(hours=3)
+    saat = simdi_tr.hour
     return 13 <= saat <= 23
 
 def tavsiye_uret(mac):
     dk = mac["dakika"]
     skor = (mac["ev_gol"], mac["dep_gol"])
-    # YENİ KURAL: Esnetilmiş Altın Fırsat Penceresi ve Skorları
     if 25 <= dk <= 65 and skor in [(1,1), (2,2), (0,1), (2,0), (2,1), (1,2), (3,1), (1,3)]:
         return "ALTIN FIRSAT: SIRADAKİ GOL (S)"
     return "GOL OLACAK (S)"
@@ -93,40 +96,19 @@ def sinyal_hesapla(mac):
     mac_gecmisi[mac_id] = {"atak": su_atak, "sut": su_sut, "time": datetime.now()}
 
     # --- KESİN RED (HARD BLOCK) FİLTRELERİ ---
-    
-    if toplam_gol >= 5: return 0, False, "🚫 KAOS BÖLGESİ"
+    if toplam_gol >= 5: return 0, False, "🚫 KAOS"
     if abs(ev_gol - dep_gol) >= 3: return 0, False, "🚫 DEATH ZONE"
-    
-    # YENİ KURAL 1: Skor Filtresi Genişletildi (1-1, 2-2, 0-1, 2-0 eklendi)
-    if skor not in [(1,1), (2,2), (0,1), (2,0), (2,1), (1,2), (3,1), (1,3)]: 
-        return 0, False, f"🚫 SKOR STATE DIŞI ({ev_gol}-{dep_gol})"
-    
-    # YENİ KURAL 3: İvme Eşiği Yumuşatıldı (10 yerine 7 yapıldı)
-    if delta_atak < 7: return 0, False, f"🚫 YETERSİZ İVME (<7) | Güncel: {delta_atak}"
+    if skor not in [(1,1), (2,2), (0,1), (2,0), (2,1), (1,2), (3,1), (1,3)]: return 0, False, "🚫 SKOR"
+    if delta_atak < 7: return 0, False, "🚫 İVME"
+    if not (25 <= dk <= 65): return 0, False, "🚫 ZAMAN"
 
-    # YENİ KURAL 2: Zaman Penceresi Genişletildi (25 ile 65 arası)
-    if not (25 <= dk <= 65): return 0, False, "🚫 ZAMAN PENCERESİ DIŞI"
-
-    # --- PUANLAMA (CEZA VE BONUSLAR) ---
+    # --- PUANLAMA ---
     puan = 0.0
-
-    # Altın pencere puanı
-    if 25 <= dk <= 65:
-        puan += 4.0
-
-    # Lojistik Ceza Modeli (Şut)
-    if su_sut <= 8:
-        puan += (su_sut * 0.25)
-    else:
-        puan -= 1.0
-
-    # Korner Anomali Temizliği
-    if korner_toplam > 12:
-        puan -= 1.0
-
-    # Geçerli İvme (Delta >= 7) Puanı
-    if delta_atak >= 7:
-        puan += 2.0
+    if 25 <= dk <= 65: puan += 4.0
+    if su_sut <= 8: puan += (su_sut * 0.25)
+    else: puan -= 1.0
+    if korner_toplam > 12: puan -= 1.0
+    if delta_atak >= 7: puan += 2.0
 
     return round(puan, 1), True, f"✅ POTANSİYEL | İvme: +{delta_atak}"
 
@@ -154,9 +136,15 @@ async def maclari_cek(session):
         url = f"https://api.betsapi.com/v3/bet365/inplay?token={BETSAPI_TOKEN}"
         async with session.get(url, timeout=10) as resp:
             data = await resp.json()
-            if data.get('success') != 1: return maclar
+            
+            if data.get('success') != 1: 
+                logger.warning(f"⚠️ API Hatası: {data.get('error', 'Bilinmeyen Hata')}")
+                return maclar
             
             results = data.get("results", [])[0] if data.get("results") else []
+            
+            # LOG EKRANI İÇİN BİLGİ MESAJI:
+            logger.info(f"💎 Bet365 Premium: {len(results)} canlı etkinlik taranıyor...")
             
             for f in results:
                 try:
@@ -184,7 +172,7 @@ async def maclari_cek(session):
                         "corner_ev": gs("corners", 0), "corner_dep": gs("corners", 1)
                     })
                 except: continue
-    except Exception as e: logger.error(f"API Hata: {e}")
+    except Exception as e: logger.error(f"API Teknik Hata: {e}")
     return maclar
 
 # ================================================
@@ -195,9 +183,10 @@ async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
     
     async with aiohttp.ClientSession() as session:
+        # BOT BAŞLADIĞINDA TELEGRAMA BİLDİRİM GÖNDERİR
         await bot.send_message(
             chat_id=CHAT_ID, 
-            text="🚀 V6.2 DATA-DRIVEN QUANT BAŞLADI\n\n🎯 Mod: Genişletilmiş State Avcısı\n🕒 Mesai: 13:00 - 00:00\n⚡ Esneklik: 25-65 Dk | Skor: 1-1, 2-0 eklendi | Delta: 7\n🔓 Overfitting kilidi açıldı."
+            text="🚀 V6.2 DATA-DRIVEN QUANT BAŞLADI\n\n✅ Türkiye Saati Entegre Edildi\n✅ Veri Motoru Aktif"
         )
         
         while True:
@@ -205,6 +194,7 @@ async def main():
                 cleanup_memory()
                 
                 if not aktif_mi():
+                    logger.info("💤 Mesai saatleri dışında (Uyku modu).")
                     await asyncio.sleep(600)
                     continue
 
