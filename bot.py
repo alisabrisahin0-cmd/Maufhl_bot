@@ -1,11 +1,9 @@
-""
-MAC ANALIZ BOTU - V7.2 THE NESINE HYBRID (SYNTAX FIX)
-Özellikler: 
-1- BetsAPI Veri Motoru (40 Maç Limit Korumalı)
-2- Nesine Canlı Bahis Terminolojisi
-3- 3x Gemini API Rotasyonu
-4- Güvenli Kod Formatı (Copy-Paste Korumalı)
-"""
+# MAC ANALIZ BOTU - V7.3 THE NESINE HYBRID (BULLETPROOF)
+# Özellikler: 
+# 1- BetsAPI Veri Motoru (40 Maç Limit Korumalı)
+# 2- Nesine Canlı Bahis Terminolojisi
+# 3- 3x Gemini API Rotasyonu
+# 4- Güvenli Kod Formatı (Copy-Paste Korumalı)
 
 import asyncio
 import aiohttp
