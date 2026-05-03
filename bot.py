@@ -1,9 +1,9 @@
-# MAC ANALIZ BOTU - V7.9 THE GHOST BUSTER (HAYALET AVCISI)
+# MAC ANALIZ BOTU - V8.0 THE TIME KEEPER (ZAMAN MUHAFIZI)
 # Özellikler: 
-# 1- Çökmeyen Düz Metin AI Motoru (Her yorum 100% özgün)
-# 2- Ghost Match (Donuk/Bitik Maç) Dedektörü
-# 3- Devre Arası Haksız Puan Engellemesi
-# 4- Güvenli Kod Formatı
+# 1- Saat Senkronizasyonu (45'te takılı kalan maçları tespit eder)
+# 2- Genişletilmiş Nesine Alt Lig/Amatör Filtresi
+# 3- Çökmeyen Düz Metin AI Motoru
+# 4- Ghost Match (Donuk/Bitik Maç) Dedektörü
 
 import asyncio
 import aiohttp
@@ -12,6 +12,7 @@ import logging
 import os
 import asyncpg
 import random
+import re
 from datetime import datetime, timedelta
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -56,11 +57,15 @@ def run_health_check():
     HTTPServer(('0.0.0.0', port), HealthCheckHandler).serve_forever()
 
 # ================================================
-# NESİNE BÜLTEN KONTROLÜ
+# NESİNE BÜLTEN KONTROLÜ (GÜNCELLENDİ)
 # ================================================
 def nesine_uygunluk(lig, ev, dep):
     metin = (lig + " " + ev + " " + dep).lower()
-    riskli_kelimeler = ['u19', 'u20', 'u21', 'u23', 'reserve', 'amateur', 'women', 'kadınlar', 'youth', 'liga 3', 'liga 4', 'regional', 'bilinmiyor']
+    riskli_kelimeler = [
+        'u19', 'u20', 'u21', 'u23', 'reserve', 'amateur', 'amatör', 
+        'women', 'kadınlar', 'youth', 'liga 3', 'liga 4', 
+        'iii liga', 'iv liga', 'regional', 'bilinmiyor'
+    ]
     
     if any(kelime in metin for kelime in riskli_kelimeler):
         return "⚠️ Nesine'de Olmayabilir (Alt Lig/Gençler)"
@@ -124,7 +129,7 @@ async def sonuc_guncelle(mac_id, sonuc, final_ev, final_dep):
         pass
 
 # ================================================
-# VERİ MOTORU (BETSAPI)
+# VERİ MOTORU (BETSAPI) & ZAMAN SENKRONİZATÖRÜ
 # ================================================
 async def mac_detay_cek(session, fixture_id):
     try:
@@ -180,7 +185,7 @@ async def maclari_cek():
                                     dep_isim = item.get('NA', '').split(' v ')[1] if ' v ' in item.get('NA', '') else 'Dep'
                                     lig_isim = item.get('CT') or item.get('L3') or item.get('CC') or 'Bilinmiyor'
                                     dk = int(item.get('TM', 0))
-                                    tt = str(item.get('TT', '1')) # Bet365 Devre Arası kontrolcüsü (0 ise durmuştur)
+                                    tt = str(item.get('TT', '1'))
                                     skor = item.get('SS', '0-0')
                                     ev_gol = int(skor.split('-')[0]) if '-' in skor else 0
                                     dep_gol = int(skor.split('-')[1]) if '-' in skor else 0
@@ -192,6 +197,15 @@ async def maclari_cek():
                                     elif isim == 'IRedCard':
                                         ev_kirmizi = int(detay[i+1].get('D1', 0)) if i+1 < len(detay) and str(detay[i+1].get('D1', '')).isdigit() else 0
                                         dep_kirmizi = int(detay[i+2].get('D1', 0)) if i+2 < len(detay) and str(detay[i+2].get('D1', '')).isdigit() else 0
+                                elif t == 'ST':
+                                    # YENİ: ZAMAN SENKRONİZATÖRÜ (STUCK AT 45 FİX)
+                                    # Olay metinlerini ("85' - Sarı Kart") tarar ve en büyük dakikayı alır
+                                    la_metin = str(item.get('LA', ''))
+                                    match = re.search(r'^(\d+)(?:\+\d+)?\'', la_metin)
+                                    if match:
+                                        olay_dakikasi = int(match.group(1))
+                                        if olay_dakikasi > dk:
+                                            dk = olay_dakikasi
 
                             # Aşırı uzun (buga girmiş) maçları engelle
                             if dk > 105:
@@ -228,13 +242,11 @@ def sinyal_hesapla(mac):
     delta_korner = max(0, suanki_korner - gecmis['korner'])
     
     # 👻 DONUK MAÇ (GHOST BUSTER) KONTROLÜ
-    # Eğer dakika aynı kaldıysa ve üzerinden 15 dakikadan fazla geçtiyse (ve devre arası değilse) bu maç donmuştur.
     if gecmis['dakika'] == dakika:
         gecen_sure = (simdi - gecmis['son_hareket']).total_seconds() / 60
         if gecen_sure > 15 and not mac.get('devre_arasi', False):
             return 0, [], "GHOST"
     else:
-        # Dakika değişmiş, zamanlayıcıyı sıfırla
         gecmis['dakika'] = dakika
         gecmis['son_hareket'] = simdi
 
@@ -270,7 +282,6 @@ def sinyal_hesapla(mac):
         detay.append(f"🟥 Kırmızı Kart - Savunma Zaafı! +2.0")
         strateji_adi = "KIRMIZI_KART"
 
-    # Devre arasındaki 45'lere haksız puan verilmesi engellendi
     if 54 <= dakika <= 62:
         puan += 3.0
         detay.append("⏱️ Altın Pencere (54-62') +3.0")
@@ -327,7 +338,6 @@ async def gemini_analiz(mac, tahmin, neden):
     secilen_key = random.choice(GEMINI_KEYS)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={secilen_key}"
 
-    # JSON KULLANILMIYOR: Botun çökme ihtimali %0'a indirildi.
     prompt = f"""Sen saha içini okuyan ve çok iddialı, özgün cümleler kuran usta bir canlı bahis analistisin.
 KURAL 1: Bana ASLA maçtaki korneri, skoru veya istatistiği tekrar etme!
 KURAL 2: Her maç için YEPYENİ benzetmeler kullan. Robotik olma.
@@ -346,7 +356,7 @@ Başka hiçbir şey ekleme."""
     try:
         payload = {
             "contents": [{"parts": [{"text": prompt}]}], 
-            "generationConfig": {"temperature": 0.9} # Yaratıcılık yüksek
+            "generationConfig": {"temperature": 0.9} 
         }
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=15) as resp:
@@ -354,7 +364,6 @@ Başka hiçbir şey ekleme."""
                     data = await resp.json()
                     text = data['candidates'][0]['content']['parts'][0]['text'].strip()
                     
-                    # Güvenli Ayrıştırma (Sadece düz metin)
                     gir = True
                     if "[RİSKLİ]" in text.upper():
                         gir = False
@@ -366,7 +375,6 @@ Başka hiçbir şey ekleme."""
     except Exception as e: 
         pass
     
-    # Hata durumunda dönecek "Çoklu Yedek" cümleler
     alternatifler = [
         "Saha içindeki baskı iyice arttı, savunmanın her an hata yapma ihtimali yüksek.",
         "Karşılıklı ataklarla tempo tavan yapmış, bu dakikalarda bir kırılma yaşanması sürpriz olmaz.",
@@ -380,7 +388,6 @@ Başka hiçbir şey ekleme."""
 async def bildirim_gonder(bot, mac, puan, detay, tahmin, neden, ai_yorum, ai_onay, strateji):
     nesine_durum = nesine_uygunluk(mac['lig'], mac['ev'], mac['dep'])
     
-    # Devre Arası Rozeti
     dk_gosterimi = f"{mac['dakika']}. DK"
     if mac.get('devre_arasi'):
         dk_gosterimi = "45. DK (Devre Arası)"
@@ -453,7 +460,7 @@ async def ana_dongu():
     try: 
         await bot.send_message(
             chat_id=CHAT_ID, 
-            text="🤖 V7.9 THE GHOST BUSTER — AKTİF\n✅ Düz Metin AI Motoru (Tamamen Özgün Yorumlar)\n✅ Donuk/Biten Maç Koruyucusu\n✅ Devre Arası Puan Koruması\n\nGözlem Başlıyor..."
+            text="🤖 V8.0 THE TIME KEEPER — AKTİF\n✅ Zaman Senkronizatörü Devrede (Alt Liglerde Saati Doğrular)\n✅ Amatör/Alt Lig Filtreleri Genişletildi\n\nGözlem Başlıyor..."
         )
     except Exception as e: 
         pass
@@ -485,7 +492,6 @@ async def ana_dongu():
                 puan, detay, strateji = sinyal_hesapla(mac)
                 mac_id = mac['id']
 
-                # Sinyal verilemeyecek durumdaysa (Ghost match vs) atla
                 if strateji == "GHOST" or strateji == "GENEL":
                     continue
 
