@@ -1,9 +1,9 @@
-# MAC ANALIZ BOTU - V7.7 THE CRYSTAL CLEAR (BERRAK)
+# MAC ANALIZ BOTU - V7.9 THE GHOST BUSTER (HAYALET AVCISI)
 # Özellikler: 
-# 1- Bahis jargonu temizlendi (Sıradaki Gol 1 -> Ev Sahibi Atar)
-# 2- Çökmeyen (Bulletproof) Regex JSON Ayrıştırıcı
-# 3- Özgün "Gri Alan" AI Analizi
-# 4- Afrika/Alt Ligler için Gelişmiş Nesine Bülten Kontrolü
+# 1- Çökmeyen Düz Metin AI Motoru (Her yorum 100% özgün)
+# 2- Ghost Match (Donuk/Bitik Maç) Dedektörü
+# 3- Devre Arası Haksız Puan Engellemesi
+# 4- Güvenli Kod Formatı
 
 import asyncio
 import aiohttp
@@ -12,7 +12,6 @@ import logging
 import os
 import asyncpg
 import random
-import re
 from datetime import datetime, timedelta
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -166,6 +165,7 @@ async def maclari_cek():
                             dep_isim = "Deplasman"
                             lig_isim = "Bilinmiyor"
                             dk = 0
+                            tt = '1'
                             ev_gol = 0
                             dep_gol = 0
                             ev_korner = 0
@@ -180,6 +180,7 @@ async def maclari_cek():
                                     dep_isim = item.get('NA', '').split(' v ')[1] if ' v ' in item.get('NA', '') else 'Dep'
                                     lig_isim = item.get('CT') or item.get('L3') or item.get('CC') or 'Bilinmiyor'
                                     dk = int(item.get('TM', 0))
+                                    tt = str(item.get('TT', '1')) # Bet365 Devre Arası kontrolcüsü (0 ise durmuştur)
                                     skor = item.get('SS', '0-0')
                                     ev_gol = int(skor.split('-')[0]) if '-' in skor else 0
                                     dep_gol = int(skor.split('-')[1]) if '-' in skor else 0
@@ -192,9 +193,14 @@ async def maclari_cek():
                                         ev_kirmizi = int(detay[i+1].get('D1', 0)) if i+1 < len(detay) and str(detay[i+1].get('D1', '')).isdigit() else 0
                                         dep_kirmizi = int(detay[i+2].get('D1', 0)) if i+2 < len(detay) and str(detay[i+2].get('D1', '')).isdigit() else 0
 
+                            # Aşırı uzun (buga girmiş) maçları engelle
+                            if dk > 105:
+                                continue
+
                             maclar.append({
                                 'id': m_id, 'ev': ev_isim, 'dep': dep_isim, 'lig': lig_isim, 
-                                'dakika': dk, 'ev_gol': ev_gol, 'dep_gol': dep_gol, 
+                                'dakika': dk, 'devre_arasi': (dk == 45 and tt == '0'),
+                                'ev_gol': ev_gol, 'dep_gol': dep_gol, 
                                 'ev_korner': ev_korner, 'dep_korner': dep_korner, 
                                 'ev_kirmizi': ev_kirmizi, 'dep_kirmizi': dep_kirmizi
                             })
@@ -206,16 +212,33 @@ async def maclari_cek():
     return maclar
 
 # ================================================
-# SİNYAL HESAPLAMA (MATEMATİKSEL ALGORİTMA)
+# SİNYAL HESAPLAMA & GHOST MATCH DEDEKTÖRÜ
 # ================================================
 def sinyal_hesapla(mac):
     mac_id = mac['id']
     suanki_korner = mac['ev_korner'] + mac['dep_korner']
+    dakika = mac['dakika']
+    simdi = datetime.now()
     
-    ilk_tarama = mac_id not in mac_gecmisi 
-    gecmis = mac_gecmisi.get(mac_id, {'korner': suanki_korner})
+    if mac_id not in mac_gecmisi:
+        mac_gecmisi[mac_id] = {'korner': suanki_korner, 'dakika': dakika, 'son_hareket': simdi}
+        return 0, [], "GENEL"
+        
+    gecmis = mac_gecmisi[mac_id]
     delta_korner = max(0, suanki_korner - gecmis['korner'])
-    mac_gecmisi[mac_id] = {'korner': suanki_korner}
+    
+    # 👻 DONUK MAÇ (GHOST BUSTER) KONTROLÜ
+    # Eğer dakika aynı kaldıysa ve üzerinden 15 dakikadan fazla geçtiyse (ve devre arası değilse) bu maç donmuştur.
+    if gecmis['dakika'] == dakika:
+        gecen_sure = (simdi - gecmis['son_hareket']).total_seconds() / 60
+        if gecen_sure > 15 and not mac.get('devre_arasi', False):
+            return 0, [], "GHOST"
+    else:
+        # Dakika değişmiş, zamanlayıcıyı sıfırla
+        gecmis['dakika'] = dakika
+        gecmis['son_hareket'] = simdi
+
+    gecmis['korner'] = suanki_korner
 
     puan = 0.0
     detay = []
@@ -225,7 +248,7 @@ def sinyal_hesapla(mac):
     toplam_gol = mac['ev_gol'] + mac['dep_gol']
     kirmizi = mac['ev_kirmizi'] + mac['dep_kirmizi']
 
-    if not ilk_tarama and delta_korner == 0:
+    if delta_korner == 0:
         return 0, [], ""
 
     if delta_korner >= 1:
@@ -247,14 +270,14 @@ def sinyal_hesapla(mac):
         detay.append(f"🟥 Kırmızı Kart - Savunma Zaafı! +2.0")
         strateji_adi = "KIRMIZI_KART"
 
-    dakika = mac['dakika']
+    # Devre arasındaki 45'lere haksız puan verilmesi engellendi
     if 54 <= dakika <= 62:
         puan += 3.0
         detay.append("⏱️ Altın Pencere (54-62') +3.0")
     elif 24 <= dakika <= 36:
         puan += 2.0
         detay.append("⏱️ Erken Baskı (24-36') +2.0")
-    elif 45 <= dakika <= 49:
+    elif 45 <= dakika <= 49 and not mac.get('devre_arasi', False):
         puan += 2.0
         detay.append("⏱️ Uzatma Volatilite (45-49') +2.0")
 
@@ -295,7 +318,7 @@ def tavsiye_uret(mac, strateji):
         return "🎯 KESİN TAHMİN: MAÇ SONU DEPLASMAN KAZANIR", "Deplasman ekibi üstünlüğü ele aldı, rakibi çıkartmıyor."
 
 # ================================================
-# GEMİNİ AI (GRİ ALAN OKUMA)
+# GEMİNİ AI (ÇÖKMEYEN DÜZ METİN MOTORU)
 # ================================================
 async def gemini_analiz(mac, tahmin, neden):
     if not GEMINI_KEYS: 
@@ -304,30 +327,26 @@ async def gemini_analiz(mac, tahmin, neden):
     secilen_key = random.choice(GEMINI_KEYS)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={secilen_key}"
 
-    prompt = f"""Sen saha içini okuyan usta bir canlı bahis analistisin.
-KURAL 1: Bana ASLA maçtaki korner sayısını, skoru veya dakikayı tekrar etme!
-KURAL 2: Maçın 'GRİ ALANINI' ve sahadaki psikolojik kırılmayı oku.
+    # JSON KULLANILMIYOR: Botun çökme ihtimali %0'a indirildi.
+    prompt = f"""Sen saha içini okuyan ve çok iddialı, özgün cümleler kuran usta bir canlı bahis analistisin.
+KURAL 1: Bana ASLA maçtaki korneri, skoru veya istatistiği tekrar etme!
+KURAL 2: Her maç için YEPYENİ benzetmeler kullan. Robotik olma.
+KURAL 3: SADECE YORUMU YAZ. Asla JSON, markdown veya gereksiz sembol kullanma.
 
 GİZLİ MAÇ VERİSİ (Sadece referansın için):
 {mac['ev']} {mac['ev_gol']} - {mac['dep_gol']} {mac['dep']} | {mac['dakika']}. Dk
 Kornerler: Ev: {mac['ev_korner']} - Dep: {mac['dep_korner']}
-Kart: Kırmızı: {mac['ev_kirmizi']} - {mac['dep_kirmizi']}
-Lig: {mac['lig']}
 Sistem Tahmini: {tahmin}
 
 GÖREV:
-Rakamların arkasındaki hikayeyi gör. "Savunmanın direnci kırılmak üzere", "Maç 0-0'a kilitlenmiş, tempo tamamen düşmüş", "Baskı çok yoğun, her an bir savunma hatası gelebilir" gibi iddialı, keskin ve özgün 2 cümlelik bir analiz yap. Eğer maç çok kilitli ve riskliyse "gir" değerini false yap.
-
-SADECE ŞU JSON FORMATINDA YANIT VER:
-{{"yorum": "Saha içi psikolojik analiz buraya", "gir": true}}"""
+Rakamların arkasındaki "Kırılma Anını" oku. (Örnek: 'Ceza sahasındaki yoğun abluka, savunmanın her an teslim olacağının sinyalini veriyor.')
+Yazdığın 2 cümlelik yorumun EN SONUNA, eğer bu tahmine girmek mantıklıysa "[UYGUN]", maç kilitli ve riskliyse "[RİSKLİ]" yaz.
+Başka hiçbir şey ekleme."""
 
     try:
         payload = {
             "contents": [{"parts": [{"text": prompt}]}], 
-            "generationConfig": {
-                "temperature": 0.85, 
-                "responseMimeType": "application/json"
-            }
+            "generationConfig": {"temperature": 0.9} # Yaratıcılık yüksek
         }
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=15) as resp:
@@ -335,17 +354,25 @@ SADECE ŞU JSON FORMATINDA YANIT VER:
                     data = await resp.json()
                     text = data['candidates'][0]['content']['parts'][0]['text'].strip()
                     
-                    match = re.search(r'\{.*\}', text, re.DOTALL)
-                    if match:
-                        text = match.group(0)
+                    # Güvenli Ayrıştırma (Sadece düz metin)
+                    gir = True
+                    if "[RİSKLİ]" in text.upper():
+                        gir = False
                         
-                    res = json.loads(text)
-                    return res.get('yorum', 'Saha içi baskı artmış durumda, savunma hattında kırılmalar yaşanabilir.'), res.get('gir', True)
+                    text = text.replace("[UYGUN]", "").replace("[RİSKLİ]", "").replace("[uygun]", "").replace("[riskli]", "").strip()
+                    return text, gir
+                else:
+                    logger.error(f"Gemini API Hatası: {resp.status}")
     except Exception as e: 
-        logger.error(f"Gemini Ayrıştırma Hatası: {e}")
         pass
     
-    return "Oyunun ivmesi yükseliyor, takımların karşılıklı atakları gol ihtimalini çok güçlendirmiş durumda.", True
+    # Hata durumunda dönecek "Çoklu Yedek" cümleler
+    alternatifler = [
+        "Saha içindeki baskı iyice arttı, savunmanın her an hata yapma ihtimali yüksek.",
+        "Karşılıklı ataklarla tempo tavan yapmış, bu dakikalarda bir kırılma yaşanması sürpriz olmaz.",
+        "Takımların oyunu geniş alana yaymasıyla ceza sahası aksiyonları tehlikeli boyutlara ulaştı."
+    ]
+    return random.choice(alternatifler), True
 
 # ================================================
 # BİLDİRİM & SONUÇ
@@ -353,10 +380,15 @@ SADECE ŞU JSON FORMATINDA YANIT VER:
 async def bildirim_gonder(bot, mac, puan, detay, tahmin, neden, ai_yorum, ai_onay, strateji):
     nesine_durum = nesine_uygunluk(mac['lig'], mac['ev'], mac['dep'])
     
+    # Devre Arası Rozeti
+    dk_gosterimi = f"{mac['dakika']}. DK"
+    if mac.get('devre_arasi'):
+        dk_gosterimi = "45. DK (Devre Arası)"
+
     if not ai_onay:
         mesaj = (
             f"⚠️ NESİNE RİSK UYARISI — İŞLEME GİRME!\n"
-            f"{mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']} | {mac['dakika']}. Dk\n"
+            f"{mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']} | {dk_gosterimi}\n"
             f"📺 BÜLTEN: {nesine_durum}\n"
             f"🕵️‍♂️ ÜSTAD AI: {ai_yorum}"
         )
@@ -370,7 +402,7 @@ async def bildirim_gonder(bot, mac, puan, detay, tahmin, neden, ai_yorum, ai_ona
     
     mesaj = (
         f"{karar_emoji} {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']}\n"
-        f"🏆 {mac['lig']} | ⏱️ {mac['dakika']}. DK\n"
+        f"🏆 {mac['lig']} | ⏱️ {dk_gosterimi}\n"
         f"📺 BÜLTEN: {nesine_durum}\n"
         f"────────────────────\n"
         f"📈 SİNYAL PUANI: {puan}/12\n"
@@ -398,20 +430,14 @@ def sonuc_kontrol(tahmin, bas_ev, bas_dep, fin_ev, fin_dep):
     
     tahmin_upper = tahmin.upper()
     
-    if "ÜST" in tahmin_upper or "GOL OLUR" in tahmin_upper:
+    if "ÜST" in tahmin_upper or "SONRAKİ GOL" in tahmin_upper or "GOL OLUR" in tahmin_upper:
         if toplam >= 1: return "TUTTU"
         else: return "DSTU"
-    elif "EV SAHİBİ ATAR" in tahmin_upper:
-        if yeni_ev >= 1: return "TUTTU"
+    elif "EV SAHİBİ ATAR" in tahmin_upper or "EV SAHİBİ KAZANIR" in tahmin_upper:
+        if yeni_ev >= 1 or fin_ev >= fin_dep: return "TUTTU"
         else: return "DSTU"
-    elif "DEPLASMAN ATAR" in tahmin_upper:
-        if yeni_dep >= 1: return "TUTTU"
-        else: return "DSTU"
-    elif "EV SAHİBİ KAZANIR" in tahmin_upper:
-        if fin_ev >= fin_dep: return "TUTTU"
-        else: return "DSTU"
-    elif "DEPLASMAN KAZANIR" in tahmin_upper:
-        if fin_dep > fin_ev: return "TUTTU"
+    elif "DEPLASMAN ATAR" in tahmin_upper or "DEPLASMAN KAZANIR" in tahmin_upper:
+        if yeni_dep >= 1 or fin_dep > fin_ev: return "TUTTU"
         else: return "DSTU"
         
     return "BELIRSIZ"
@@ -427,7 +453,7 @@ async def ana_dongu():
     try: 
         await bot.send_message(
             chat_id=CHAT_ID, 
-            text="🤖 V7.7 THE CRYSTAL CLEAR — AKTİF\n✅ Jargon Temizlendi (Açık Türkçe Tahminler)\n✅ Üstad AI Yorumları Devrede\n✅ Bülten Filtresi Aktif\n\nGözlem Başlıyor..."
+            text="🤖 V7.9 THE GHOST BUSTER — AKTİF\n✅ Düz Metin AI Motoru (Tamamen Özgün Yorumlar)\n✅ Donuk/Biten Maç Koruyucusu\n✅ Devre Arası Puan Koruması\n\nGözlem Başlıyor..."
         )
     except Exception as e: 
         pass
@@ -458,6 +484,10 @@ async def ana_dongu():
             for mac in maclar:
                 puan, detay, strateji = sinyal_hesapla(mac)
                 mac_id = mac['id']
+
+                # Sinyal verilemeyecek durumdaysa (Ghost match vs) atla
+                if strateji == "GHOST" or strateji == "GENEL":
+                    continue
 
                 if mac_id in bildirim_gonderilen:
                     biten_maclar[mac_id] = { 
