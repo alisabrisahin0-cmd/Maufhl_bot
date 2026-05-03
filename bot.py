@@ -1,6 +1,6 @@
 """
-MAC ANALIZ BOTU - V3.0 KANTİTATİF SÜRÜM (EXCEL VERİ OPTİMİZASYONLU)
-Özellikler: Premium BetsAPI, Excel Kanıtlı Erken Açılış (5-30'), AH Tuzak Koruması, 14:00-23:59 Mesaisi
+MAC ANALIZ BOTU - V4.0 QUANT MASTER SÜRÜMÜ
+Özellikler: Altın Pencere (55-60'), Hücum Epilasyonu (SOT Trap), Aşırı Isınma Engeli, Kaos Sınırı
 """
 
 import asyncio
@@ -33,11 +33,11 @@ logger = logging.getLogger(__name__)
 
 bildirim_gonderilen = {}
 biten_maclar = {}
-mac_gecmisi = {} # ROLLING WINDOW Hafızası
-gol_hafizasi = {} # BETSAPI SON GOL TAKİP HAFIZASI
+mac_gecmisi = {} 
+gol_hafizasi = {} 
 
 # ================================================
-# RAILWAY KORUMASI (HEALTH CHECK)
+# RAILWAY KORUMASI
 # ================================================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -50,17 +50,11 @@ def run_health_check():
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
-# ================================================
-# NESİNE FİLTRESİ VE ZAMANLAMA (14:00 - 23:59)
-# ================================================
-NESINE_LIGLERI = [
-    'Super Lig', '1. Lig', 'Premier League', 'Championship', 'La Liga', 'La Liga 2', 
-    'Serie A', 'Serie B', 'Bundesliga', '2. Bundesliga', 'Ligue 1', 'Ligue 2', 
-    'Eredivisie', 'Primeira Liga', 'Champions League', 'Europa League', 'Conference League',
-    'Copa Libertadores', 'MLS', 'Brasileirao', 'Primera Division', 'Pro League', 'Superliga'
-]
-
 def nesine_kontrol(lig_adi):
+    NESINE_LIGLERI = ['Super Lig', '1. Lig', 'Premier League', 'Championship', 'La Liga', 'La Liga 2', 
+                      'Serie A', 'Serie B', 'Bundesliga', '2. Bundesliga', 'Ligue 1', 'Ligue 2', 
+                      'Eredivisie', 'Primeira Liga', 'Champions League', 'Europa League', 'Conference League',
+                      'Copa Libertadores', 'MLS', 'Brasileirao', 'Primera Division', 'Pro League', 'Superliga']
     for lig in NESINE_LIGLERI:
         if lig.lower() in lig_adi.lower():
             return "🟢 NESİNE BÜLTENİ"
@@ -68,11 +62,10 @@ def nesine_kontrol(lig_adi):
 
 def aktif_mi():
     simdi = datetime.now()
-    saat = simdi.hour
-    return 14 <= saat <= 23
+    return 14 <= simdi.hour <= 23
 
 # ================================================
-# KANTİTATİF VE EXCEL KANITLI FİLTRELER
+# V4.0 YENİ KANTİTATİF DEKONSTRÜKSİYON FİLTRELERİ
 # ================================================
 def ustel_zaman_asimi(dakika, son_gol):
     if son_gol == 0: return 1.0, ""
@@ -84,50 +77,47 @@ def ustel_zaman_asimi(dakika, son_gol):
 
 def death_zone_kontrol(ah_deger, ev_gol, dep_gol):
     gol_fark = ev_gol - dep_gol
+    # V4.0 Güncellemesi: 3 farklı skorlarda (3-0, 4-1) rölanti (coasting) engeli
+    if abs(gol_fark) >= 3: return True, "DEATH ZONE: 3+ Farklı Skor (Rölanti/Coasting Evresi)."
+    
     if -1.0 <= ah_deger <= -0.5 and gol_fark == 1: return True, "DEATH ZONE: Favori ev sahibi 1 farkla önde."
     if 0.5 <= ah_deger <= 1.0 and gol_fark == -1: return True, "DEATH ZONE: Favori deplasman 1 farkla önde."
     return False, ""
-
-def premium_artefakt_kontrol(mac):
-    cev = mac.get('corner_ev', 0)
-    cdep = mac.get('corner_dep', 0)
-    if cev > 1000 or cdep > 1000: return 3.0, "💎 PREMIUM ARTEFAKT: Yüksek Hacimli Market ID tespit edildi!"
-    return 0.0, ""
 
 def sinyal_hesapla(mac):
     mac_id = mac['id']
     dakika = max(mac.get('dakika', 1), 1)
     ev_gol = mac.get('ev_gol', 0)
     dep_gol = mac.get('dep_gol', 0)
+    toplam_gol = ev_gol + dep_gol
     son_gol = mac.get('son_gol', 0)
     ah_deger = mac.get('ah_deger', 0.0)
     
     puan = 0.0
     detay = []
     stratejiler = []
+
+    # 1. SKOR DOYUMU (Kaos Bölgesi Engelleyicisi)
+    if toplam_gol >= 5:
+        return 0, ["OVER_LIMIT: Toplam gol 5 sınırında (Random Walk/Kaos)."], "REJECTED", False
     
-    # 1. ÜSTEL SOĞUMA (Exponential Decay) KONTROLÜ
+    # 2. ÜSTEL SOĞUMA
     decay_carpan, decay_mesaj = ustel_zaman_asimi(dakika, son_gol)
     if decay_carpan == 0.0: return 0, [decay_mesaj], "BLOCKED", False
     
-    # 2. SKOR KORUMA (Death Zone) KONTROLÜ
+    # 3. DEATH ZONE (Rölanti Koruması)
     dz_aktif, dz_mesaj = death_zone_kontrol(ah_deger, ev_gol, dep_gol)
     if dz_aktif: return 0, [dz_mesaj], "DEATH_ZONE", False
 
-    # 3. KAYAN PENCERE (ROLLING WINDOW) HESAPLAMASI VE İLK TARAMA KORUMASI
+    # 4. ROLLING WINDOW & İLK TARAMA
     suanki_tehlikeli = mac.get('dangerous_attacks_ev', 0) + mac.get('dangerous_attacks_dep', 0)
     suanki_sut = mac.get('shots_on_target_ev', 0) + mac.get('shots_on_target_dep', 0)
     
     ilk_tarama = mac_id not in mac_gecmisi 
-    
     gecmis = mac_gecmisi.get(mac_id, {'atak': suanki_tehlikeli, 'sut': suanki_sut})
     delta_atak = max(0, suanki_tehlikeli - gecmis['atak'])
     delta_sut = max(0, suanki_sut - gecmis['sut'])
     mac_gecmisi[mac_id] = {'atak': suanki_tehlikeli, 'sut': suanki_sut}
-    
-    # HARD-LOCK KAPI KONTROLÜ (İvme yoksa acımadan kes)
-    if not ilk_tarama and delta_atak < 8 and delta_sut < 1 and dakika > 20:
-        return 0, ["HARD LOCK: Son periyotta yeterli ivme yok."], "REJECTED", False
 
     if ilk_tarama:
         detay.append("🔍 KAPI: İlk ölçüm alınıyor (HFT Referans)")
@@ -136,48 +126,45 @@ def sinyal_hesapla(mac):
         detay.append(f"✅ KAPI GEÇİLDİ: Son periyot ivmesi (Atak: +{delta_atak}, Şut: +{delta_sut})")
         puan += 4.0 
 
-    # Şut Şiddeti
-    sut_puani = suanki_sut * 0.5
-    puan += sut_puani
-    detay.append(f"🎯 Şut Şiddeti: {suanki_sut} isabetli şut (+{sut_puani} Puan)")
-    
-    if delta_atak >= 15:
+    # 5. DEVRE ODAKLI ASİMETRİK İVME KONTROLÜ
+    if not ilk_tarama:
+        if dakika < 45:
+            if delta_atak >= 15:
+                return 0, ["HARD BLOCK: İlk yarı 15+ ivme (Aşırı Isınma/Overheating)."], "REJECTED", False
+            if delta_atak < 8 and delta_sut < 1 and dakika > 20:
+                return 0, ["HARD LOCK: İlk yarı yeterli ivme yok."], "REJECTED", False
+        else:
+            if delta_atak < 10:
+                return 0, ["HARD LOCK: İkinci yarı momentum tabanı (10) aşılamadı."], "REJECTED", False
+
+    # 6. SOT TRAP (İsabetli Şut Lojistik Cezası)
+    if suanki_sut <= 8:
+        sut_puani = suanki_sut * 0.25
+        puan += sut_puani
+        detay.append(f"🎯 Şut Verimliliği: {suanki_sut} isabetli şut (+{sut_puani} Puan)")
+    else:
+        puan -= 1.0
+        detay.append("⚠️ SOT TRAP: Şut sayısı 8'i aştı. Hücum Epilasyonu cezası! (-1.0 Puan)")
+
+    # 7. ZAMAN AĞIRLIKLI KAPILAR (ALTIN PENCERE)
+    if 55 <= dakika <= 60:
+        puan += 4.0
+        detay.append("💎 ALTIN PENCERE (55-60'): Geçiş oyunu zirvesi (+4.0 Puan)")
+        stratejiler.append("ALTIN_FIRSAT")
+    elif 60 < dakika <= 75:
         puan += 2.0
-        detay.append(f"🌪️ Ani Baskı İvmesi! (+2.0 Puan)")
-        stratejiler.append("YUKSEK_IVME")
+        detay.append("🔥 Geçiş Oyunu Evresi (60-75') (+2.0 Puan)")
+        stratejiler.append("GECIS_OYUNU")
 
-    # ==================================================
-    # 📊 V3.0 EXCEL KANITLI FİLTRELER 
-    # ==================================================
-    
-    # KURAL 1: ALTIN ERKEN AÇILIŞ (%88 Başarı Oranı)
-    if 5 <= dakika <= 30 and (ev_gol + dep_gol) <= 1:
-        puan += 3.5
-        detay.append("⚡ Altın Erken Açılış (0-30' ve Maks 1 Gol) +3.5")
-        stratejiler.append("ERKEN_ACILIS")
-        
-    # KURAL 2: GEÇ DAKİKA DOMİNASYONU
-    elif 60 <= dakika <= 75 and ah_deger <= -1.0:
-        puan += 1.5
-        detay.append("🔥 Agresif Baskı (Geç Dakika Dominasyonu) +1.5")
-        stratejiler.append("POWER_WINDOW")
+    # 8. ANOMALİ TEMİZLİĞİ (Korner Tuzağı)
+    korner_toplam = mac.get('corner_ev', 0) + mac.get('corner_dep', 0)
+    if korner_toplam > 1000:
+        return 0, ["API ANOMALİSİ: 1000+ Korner Reddedildi."], "REJECTED", False
+    if korner_toplam > 12:
+        puan -= 1.0
+        detay.append(f"⚠️ KORNER TUZAĞI: {korner_toplam} Korner, Etkisiz Baskı (-1.0 Puan)")
 
-    # KURAL 3: AH TUZAK KONTROLÜ (%57 Başarı Oranı Veren Tuzaklar)
-    if dakika >= 60 and ah_deger in [-0.50, -0.25, 0.25, 0.50]:
-        puan -= 3.0
-        detay.append("⚠️ AH TRAP: İkinci yarı dar handikap tuzağı! (-3.0 Puan)")
-
-    # KURAL 4: BÜYÜK HANDİKAP (DOMİNASYON) ÖDÜLÜ (%94 Başarı)
-    if ah_deger <= -1.25 or ah_deger >= 1.25:
-        puan += 2.0
-        detay.append(f"💎 Dominasyon Baremi ({ah_deger} AH) +2.0 Puan")
-        
-    # ==================================================
-
-    artefakt_puan, art_mesaj = premium_artefakt_kontrol(mac)
-    if artefakt_puan > 0:
-        puan += artefakt_puan; detay.append(art_mesaj)
-
+    # Lig Katsayısı ve Son Puan
     LIG_KATSAYISI = {'Eredivisie': 1.3, 'Bundesliga': 1.2, 'Premier League': 1.15, 'Champions League': 1.1}
     lig_katsayisi = next((katsayi for lig_adi, katsayi in LIG_KATSAYISI.items() if lig_adi.lower() in mac.get('lig', '').lower()), 1.0)
     
@@ -188,16 +175,21 @@ def sinyal_hesapla(mac):
     return round(puan, 1), detay, strateji_adi, True
 
 # ================================================
-# DÜZ METİN GEMİNİ AI
+# TAVSİYE VE AI MOTORU
 # ================================================
 def tavsiye_uret(mac, strateji):
     ev_gol, dep_gol = mac.get('ev_gol', 0), mac.get('dep_gol', 0)
-    gol_fark = ev_gol - dep_gol
+    dakika = mac.get('dakika', 1)
+    skor_fark = ev_gol - dep_gol
+    toplam_gol = ev_gol + dep_gol
     
-    if strateji == "ERKEN_ACILIS": return "GOL OLACAK (S)", "İlk yarı taktik oturmadan erken açık alan ve yüksek ivme."
-    elif strateji == "POWER_WINDOW": return "GOL OLACAK (S)", "Ağır favorinin geç dakika dominasyonu."
-    elif gol_fark >= 2: return "EV GOL ATACAK (S)", "Ev sahibi dominant skorla ilerliyor."
-    elif gol_fark <= -2: return "DEP GOL ATACAK (S)", "Deplasman dominant skorla ilerliyor."
+    # Raporun İstediği Kesin Altın Fırsat Yönergesi
+    if strateji == "ALTIN_FIRSAT" and 55 <= dakika <= 60 and abs(skor_fark) in [1, 2] and toplam_gol <= 4:
+        return "ALTIN FIRSAT: SIRADAKİ GOL (S)", "Rasyonel geçiş oyunu evresi, istatistiksel zirve."
+
+    if strateji == "GECIS_OYUNU": return "GOL OLACAK (S)", "İkinci yarı kırılma evresi, fiziksel yorgunluk boşlukları."
+    if skor_fark >= 2: return "EV GOL ATACAK (S)", "Ev sahibi dominant skorla ilerliyor."
+    elif skor_fark <= -2: return "DEP GOL ATACAK (S)", "Deplasman dominant skorla ilerliyor."
     return "GOL OLACAK (S)", "Kayan pencere (Rolling Window) yüksek ivme gösteriyor."
 
 def kasa_hesapla(puan):
@@ -210,7 +202,7 @@ async def gemini_analiz(mac):
     valid_keys = [k for k in GEMINI_KEYS if k]
     if not valid_keys: return "AI servisi kapalı."
 
-    prompt = f"MAÇ: {mac['ev']} {mac.get('ev_gol',0)}-{mac.get('dep_gol',0)} {mac['dep']} | DK: {mac['dakika']}\nKantitatif analiz bu maçta anlık bir ivme (momentum) tespit etti. Lütfen maçın canlı gidişatını tek bir somut detayla, sadece düz 2 cümle Türkçe olarak yorumla. JSON KULLANMA."
+    prompt = f"MAÇ: {mac['ev']} {mac.get('ev_gol',0)}-{mac.get('dep_gol',0)} {mac['dep']} | DK: {mac['dakika']}\nKantitatif analiz bu maçta anlık bir ivme tespit etti. Lütfen maçı tek bir somut detayla, düz 2 cümle Türkçe olarak yorumla. JSON KULLANMA."
 
     for _ in range(len(valid_keys)):
         active_key = valid_keys[current_key_index]
@@ -278,7 +270,7 @@ async def maclari_cek():
                             'possession_ev': int(possession[0]), 'possession_dep': int(possession[1]),
                             'dangerous_attacks_ev': int(dangerous[0]), 'dangerous_attacks_dep': int(dangerous[1]),
                             'corner_ev': int(corners[0]), 'corner_dep': int(corners[1]),
-                            'ah_deger': 0.0 # Handikap API verisi eklendiğinde buradan okunacak
+                            'ah_deger': 0.0 
                         })
                     except: continue
     except Exception as e: logger.error(f"BetsAPI Bağlantı Hatası: {e}")
@@ -312,16 +304,16 @@ async def ana_dongu():
     bot = Bot(token=TELEGRAM_TOKEN)
     
     mesaj = (
-        "🤖 KANTİTATİF ANALİZ BOTU V3.0 BAŞLADI\n\n"
-        "✅ Rolling Window (Kayan Pencere - 3 DK)\n"
-        "✅ Cold Start Koruması Aktif\n"
-        "✅ EXCEL KURALI 1: Erken Açılış Bonusu (5-30')\n"
-        "✅ EXCEL KURALI 2: AH Tuzak Koruması (-0.50 vb.)\n"
-        "✅ Premium BetsAPI (0 Gecikme) Motoru\n"
-        "✅ Sezgi Motoru (Sorunsuz Düz Metin AI)\n\n"
-        "🕒 Mesai Saatleri: 14:00 - 23:59\n"
+        "🤖 V4.0 QUANT MASTER BOT BAŞLADI\n\n"
+        "✅ Altın Pencere (55-60') Aktif\n"
+        "✅ Hücum Epilasyonu (SOT Trap) Engeli\n"
+        "✅ İlk Yarı Aşırı Isınma (Overheating) Kilidi\n"
+        "✅ Kaos Sınırı (5+ Gol) Bloğu\n"
+        "✅ İkinci Yarı Momentum Tabanı (10 Atak)\n"
+        "✅ Premium BetsAPI (0 Gecikme) Motoru\n\n"
+        "🕒 Mesai: 14:00 - 23:59\n"
         f"🎯 Min Puan Eşiği: {MIN_PUAN}\n\n"
-        "HFT Algoritma Premium Veriyle Ava Çıktı! 🚀"
+        "Profesyonel Algoritma Ava Çıktı! 🚀"
     )
     try: await bot.send_message(chat_id=CHAT_ID, text=mesaj)
     except: pass
@@ -353,7 +345,7 @@ async def ana_dongu():
 
         except Exception as e: logger.error(f"Döngü Hatası: {e}")
         
-        await asyncio.sleep(180) # Tarama Hızı: 3 Dakika
+        await asyncio.sleep(180) 
 
 if __name__ == "__main__":
     asyncio.run(ana_dongu())
