@@ -1,6 +1,6 @@
 """
-V6.3 QUANT MASTER - THE SNIPER & DEBUGGER
-Özellikler: 40 Maç Sınırı (Sniper), 3 Dakika Döngü, Raw Stats Logger, Retry Logic
+V6.4 QUANT MASTER - THE REVEALER
+Özellikler: Total Verbose Logging, Detailed Error Reporting, 40 Match Sniper
 """
 
 import asyncio
@@ -48,8 +48,8 @@ def sinyal_hesapla(mac):
     delta_sut = max(0, suanki_sut - gecmis['sut'])
     mac_gecmisi[mac_id] = {'atak': suanki_tehlikeli, 'sut': suanki_sut}
     
-    # Debug Log: Her maçın hesaplanan değerini görelim
-    logger.info(f"🔍 ANALİZ: {mac['ev']} | Atak Farkı: {delta_atak} | Şut Farkı: {delta_sut}")
+    # DETAYLI ANALİZ LOGU
+    logger.info(f"🧐 ANALİZ EDİLİYOR: {mac['ev']} vs {mac['dep']} | Atak: {suanki_tehlikeli}(+{delta_atak}) | Şut: {suanki_sut}(+{delta_sut})")
 
     if not ilk_tarama and delta_atak < 4 and delta_sut < 1: return 0, [], False
     puan = 4.0 if not ilk_tarama else 2.0
@@ -57,21 +57,25 @@ def sinyal_hesapla(mac):
     return round(puan, 1), [f"Atak: +{delta_atak}", f"Şut: +{delta_sut}"], True
 
 # ================================================
-# VERİ MOTORU (SNIPER & DEBUG)
+# VERİ MOTORU (TAM ŞEFFAFLIK)
 # ================================================
-async def mac_detay_cek(session, fixture_id, debug_mod=False):
+async def mac_detay_cek(session, fixture_id):
     try:
         url = f"https://api.betsapi.com/v3/bet365/event?token={BETSAPI_TOKEN}&FI={fixture_id}"
         async with session.get(url, timeout=15) as resp:
+            logger.info(f"📡 API Sorgusu: FI={fixture_id} | Durum: {resp.status}")
             if resp.status == 200:
                 data = await resp.json()
-                res = data.get('results', [{}])[0]
-                if debug_mod and res:
-                    # 🧪 RÖNTGEN: İstatistiklerin gerçek isimlerini loglara dök
-                    logger.info(f"🧪 RÖNTGEN - Stats İçeriği: {res.get('stats', 'BOS')}")
-                return res
-            elif resp.status == 429: return "LIMIT"
-    except: return None
+                if data.get('success') == 1 and data.get('results'):
+                    return data['results'][0]
+                else:
+                    logger.warning(f"⚠️ Veri Yapısı Hatası: {data}")
+            elif resp.status == 429:
+                logger.error("🚫 KRİTİK: BetsAPI Limit Dolu (429)!")
+                return "LIMIT"
+    except Exception as e:
+        logger.error(f"❌ Bağlantı Hatası: {e}")
+    return None
 
 async def maclari_cek():
     maclar = []
@@ -82,19 +86,57 @@ async def maclari_cek():
             raw_results = data.get('results', [])
             if raw_results and isinstance(raw_results[0], list): raw_results = raw_results[0]
             
-            # SNIPER MODU: Sadece en aktif 40 maça odaklan
             adaylar = raw_results[:40] 
-            logger.info(f"🎯 Sniper: {len(raw_results)} maç arasından seçilen 40 maç taranıyor...")
+            logger.info(f"🎯 Sniper Modu: {len(raw_results)} maçtan {len(adaylar)} tanesi için detaylar isteniyor...")
 
             for i, f in enumerate(adaylar):
                 m_id = str(f.get('ID', f.get('id', f.get('FI', ''))))
-                # Sadece ilk maçta röntgen (debug) çalıştır
-                detay = await mac_detay_cek(session, m_id, debug_mod=(i == 0))
+                detay = await mac_detay_cek(session, m_id)
                 
-                if detay == "LIMIT":
-                    logger.warning("🚫 Kota bitti!")
-                    break
+                if detay == "LIMIT": break
                 
+                if detay and isinstance(detay, dict):
+                    try:
+                        timer = detay.get('timer', {})
+                        stats = detay.get('stats', {})
+                        skor = str(detay.get('ss', '0-0'))
+                        
+                        maclar.append({
+                            'id': m_id, 'ev': detay.get('home', {}).get('name'), 
+                            'dep': detay.get('away', {}).get('name'), 'lig': detay.get('league', {}).get('name', 'Lig'), 
+                            'dakika': int(timer.get('tm', 0)) if isinstance(timer, dict) else 0,
+                            'ev_gol': int(skor.split('-')[0]) if '-' in skor else 0,
+                            'dep_gol': int(skor.split('-')[1]) if '-' in skor else 0,
+                            'shots_on_target_ev': int(stats.get('on_target', [0,0])[0]),
+                            'shots_on_target_dep': int(stats.get('on_target', [0,0])[1]),
+                            'dangerous_attacks_ev': int(stats.get('dangerous_attacks', [0,0])[0]),
+                            'dangerous_attacks_dep': int(stats.get('dangerous_attacks', [0,0])[1])
+                        })
+                        await asyncio.sleep(1.5)
+                    except Exception as e:
+                        logger.error(f"🛠️ İşleme Hatası: {e}")
+    return maclar
+
+async def ana_dongu():
+    threading.Thread(target=run_health_check, daemon=True).start()
+    bot = Bot(token=TELEGRAM_TOKEN)
+    await bot.send_message(chat_id=CHAT_ID, text="🔍 V6.4 REVEALER AKTİF\n📜 Tüm adımlar loglanıyor...")
+    while True:
+        try:
+            maclar = await maclari_cek()
+            logger.info(f"✅ Tarama Bitti: {len(maclar)} maç başarıyla analiz edildi.")
+            for mac in maclar:
+                if mac['id'] in bildirim_gonderilen: continue
+                puan, detay_list, gecti = sinyal_hesapla(mac)
+                if gecti and puan >= MIN_PUAN:
+                    mesaj = f"⚽ {mac['ev']} - {mac['dep']}\n📈 Puan: {puan}\n⏱️ {mac['dakika']}. DK\n📝 {', '.join(detay_list)}"
+                    await bot.send_message(chat_id=CHAT_ID, text=mesaj)
+                    bildirim_gonderilen[mac['id']] = True
+        except Exception as e: logger.error(f"🔴 Ana Döngü Çöktü: {e}")
+        await asyncio.sleep(180)
+
+if __name__ == "__main__":
+    asyncio.run(ana_dongu())
                 if detay and isinstance(detay, dict):
                     try:
                         timer = detay.get('timer', {})
