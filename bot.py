@@ -1,6 +1,6 @@
 """
-V6.1 SNIPER QUANT MASTER - CORE ENGINE
-Özellikler: State & Timing Bot, Lojistik Ceza Modeli, Optimum Skor Filtresi, Bet365 Premium
+V6.2 SNIPER QUANT MASTER - RELAXED ENGINE
+Özellikler: Genişletilmiş Skor Filtresi (1-1, 2-0 vb.), Esnek Zaman Penceresi (25-65), Yumuşatılmış İvme (Delta 7)
 """
 
 import asyncio
@@ -20,14 +20,14 @@ CHAT_ID = os.getenv("CHAT_ID", "")
 BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
 GEMINI_KEYS = [os.getenv("GEMINI_KEY_1", ""), os.getenv("GEMINI_KEY_2", ""), os.getenv("GEMINI_KEY_3", "")]
 
-# Keskin nişancı barajı (Altın vuruş için 7.0 yeterli)
+# Keskin nişancı barajı
 MIN_PUAN = float(os.getenv("MIN_PUAN", "7.0"))
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # ================================================
-# BELLEK YÖNETİMİ (TTL: 120 DK - MEMORY LEAK KORUMASI)
+# BELLEK YÖNETİMİ (TTL: 120 DK)
 # ================================================
 mac_gecmisi = {}
 gol_hafizasi = {}
@@ -41,7 +41,7 @@ def cleanup_memory():
         for k in silinecek: del store[k]
 
 # ================================================
-# SAĞLIK KONTROLÜ (RAILWAY İÇİN)
+# SAĞLIK KONTROLÜ (RAILWAY)
 # ================================================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -69,13 +69,13 @@ def aktif_mi():
 def tavsiye_uret(mac):
     dk = mac["dakika"]
     skor = (mac["ev_gol"], mac["dep_gol"])
-    # Kural 8: Tavsiye Sistemi Revizyonu
-    if 55 <= dk <= 60 and skor in [(2,1), (3,1), (1,2), (1,3)]:
+    # YENİ KURAL: Esnetilmiş Altın Fırsat Penceresi ve Skorları
+    if 25 <= dk <= 65 and skor in [(1,1), (2,2), (0,1), (2,0), (2,1), (1,2), (3,1), (1,3)]:
         return "ALTIN FIRSAT: SIRADAKİ GOL (S)"
     return "GOL OLACAK (S)"
 
 # ================================================
-# KURAL SETİ: V6 SNIPER ANALİZ MOTORU
+# KURAL SETİ: V6.2 RELAXED ANALİZ MOTORU
 # ================================================
 def sinyal_hesapla(mac):
     mac_id = mac["id"]
@@ -88,55 +88,45 @@ def sinyal_hesapla(mac):
     su_sut = mac["shots_on_target_ev"] + mac["shots_on_target_dep"]
     korner_toplam = mac["corner_ev"] + mac["corner_dep"]
 
-    # Rolling Window (Kayan Pencere Güncellemesi)
     gecmis = mac_gecmisi.get(mac_id, {"atak": su_atak, "sut": su_sut})
     delta_atak = max(0, su_atak - gecmis["atak"])
     mac_gecmisi[mac_id] = {"atak": su_atak, "sut": su_sut, "time": datetime.now()}
 
     # --- KESİN RED (HARD BLOCK) FİLTRELERİ ---
     
-    # Kural 2: Kaos Bölgesi
     if toplam_gol >= 5: return 0, False, "🚫 KAOS BÖLGESİ"
-    
-    # Kural 6: Death Zone (3 Fark)
     if abs(ev_gol - dep_gol) >= 3: return 0, False, "🚫 DEATH ZONE"
     
-    # Kural 7: Optimum Skor State
-    if skor not in [(2,1), (1,2), (3,1), (1,3)]: return 0, False, f"🚫 SKOR STATE DIŞI ({ev_gol}-{dep_gol})"
+    # YENİ KURAL 1: Skor Filtresi Genişletildi (1-1, 2-2, 0-1, 2-0 eklendi)
+    if skor not in [(1,1), (2,2), (0,1), (2,0), (2,1), (1,2), (3,1), (1,3)]: 
+        return 0, False, f"🚫 SKOR STATE DIŞI ({ev_gol}-{dep_gol})"
     
-    # Kural 4: Devreye Göre Momentum (Aşırı Isınma & İvme)
-    if dk < 45 and delta_atak >= 15: return 0, False, "🚫 İLK YARI AŞIRI ISINMA"
-    if dk >= 45 and delta_atak < 10: return 0, False, "🚫 İKİNCİ YARI YETERSİZ İVME"
+    # YENİ KURAL 3: İvme Eşiği Yumuşatıldı (10 yerine 7 yapıldı)
+    if delta_atak < 7: return 0, False, f"🚫 YETERSİZ İVME (<7) | Güncel: {delta_atak}"
 
-    # Sadece 55-75 arası maçlara izin ver (Kural 1 & 9 Gereği)
-    if not (55 <= dk <= 75): return 0, False, "🚫 ZAMAN PENCERESİ DIŞI"
+    # YENİ KURAL 2: Zaman Penceresi Genişletildi (25 ile 65 arası)
+    if not (25 <= dk <= 65): return 0, False, "🚫 ZAMAN PENCERESİ DIŞI"
 
     # --- PUANLAMA (CEZA VE BONUSLAR) ---
     puan = 0.0
 
-    # Kural 1: Zaman Penceresi Puanı
-    if 55 <= dk <= 60:
+    # Altın pencere puanı
+    if 25 <= dk <= 65:
         puan += 4.0
-    elif 60 < dk <= 75:
-        puan += 2.0
 
-    # Kural 3: Lojistik Ceza Modeli (Şut)
+    # Lojistik Ceza Modeli (Şut)
     if su_sut <= 8:
         puan += (su_sut * 0.25)
     else:
         puan -= 1.0
 
-    # Kural 5: Korner Anomali Temizliği
+    # Korner Anomali Temizliği
     if korner_toplam > 12:
         puan -= 1.0
 
-    # Ekstra: Geçerli İvme (Delta >= 10) puan barajını aşmasını garantiler
-    if delta_atak >= 10:
+    # Geçerli İvme (Delta >= 7) Puanı
+    if delta_atak >= 7:
         puan += 2.0
-
-    # Core Engine Sinyali (Kural 9 Güvencesi)
-    if 55 <= dk <= 60 and toplam_gol < 5 and abs(ev_gol - dep_gol) < 3 and skor in [(2,1),(1,2),(3,1),(1,3)] and su_sut <= 8 and delta_atak >= 10:
-        return round(puan, 1), True, f"🎯 CORE ENGINE (SNIPER VURUŞU) | İvme: +{delta_atak}"
 
     return round(puan, 1), True, f"✅ POTANSİYEL | İvme: +{delta_atak}"
 
@@ -146,7 +136,7 @@ def sinyal_hesapla(mac):
 async def gemini_analiz(session, mac):
     keys = [k for k in GEMINI_KEYS if k]
     if not keys: return "AI Analizi devre dışı."
-    prompt = f"MAÇ: {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']} (DK: {mac['dakika']}). Algoritma altın fırsat penceresi yakaladı. 'State' (Durum) analizi için tek cümlelik, keskin bir yorum yap. JSON kullanma."
+    prompt = f"MAÇ: {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']} (DK: {mac['dakika']}). Futbol veri analizi algoritması bu maçta kırılma anı (gol) tespit etti. Bu skoru ve dakikayı baz alarak tek cümlelik profesyonel bir yorum yap. JSON kullanma."
     
     for key in keys:
         try:
@@ -167,7 +157,6 @@ async def maclari_cek(session):
             if data.get('success') != 1: return maclar
             
             results = data.get("results", [])[0] if data.get("results") else []
-            logger.info(f"💎 Bet365 Premium: {len(results)} maç HFT filtreden geçiyor...")
             
             for f in results:
                 try:
@@ -178,7 +167,6 @@ async def maclari_cek(session):
                     ev_g, dep_g = map(int, skor.split("-"))
                     m_id = str(f["id"])
                     
-                    # Gol Hafızası
                     onceki = gol_hafizasi.get(m_id, {"toplam": ev_g + dep_g, "son": 0})
                     son_g = dk if (ev_g + dep_g) > onceki["toplam"] else onceki["son"]
                     gol_hafizasi[m_id] = {"toplam": ev_g + dep_g, "son": son_g, "time": datetime.now()}
@@ -209,15 +197,15 @@ async def main():
     async with aiohttp.ClientSession() as session:
         await bot.send_message(
             chat_id=CHAT_ID, 
-            text="🚀 V6.1 SNIPER QUANT MASTER BAŞLADI\n\n🎯 Mod: State + Timing\n🕒 Mesai: 13:00 - 00:00\n⚡ Filtre: Lojistik Ceza Model v1\n🔒 Sadece kesin fırsatlar onaylanacak."
+            text="🚀 V6.2 DATA-DRIVEN QUANT BAŞLADI\n\n🎯 Mod: Genişletilmiş State Avcısı\n🕒 Mesai: 13:00 - 00:00\n⚡ Esneklik: 25-65 Dk | Skor: 1-1, 2-0 eklendi | Delta: 7\n🔓 Overfitting kilidi açıldı."
         )
         
         while True:
             try:
-                cleanup_memory() # Her döngüde bellek temizliği
+                cleanup_memory()
                 
                 if not aktif_mi():
-                    await asyncio.sleep(600) # Mesai dışı 10 dk uyu
+                    await asyncio.sleep(600)
                     continue
 
                 maclar = await maclari_cek(session)
@@ -241,7 +229,7 @@ async def main():
                             f"🏆 {mac['lig']} | ⏱️ {mac['dakika']}. DK\n"
                             f"{nesine}\n"
                             f"────────────────────\n"
-                            f"📈 SNIPER PUAN: {puan}/15\n"
+                            f"📈 QUANT PUAN: {puan}/15\n"
                             f"📝 {rapor}\n"
                             f"🧠 AI: {yorum}\n"
                             f"────────────────────\n"
@@ -249,12 +237,10 @@ async def main():
                         )
                         
                         await bot.send_message(chat_id=CHAT_ID, text=mesaj)
-                        # Maçı tekrar bildirmemek için hafızaya al
                         bildirim_gonderilen[mac["id"]] = {"time": datetime.now()}
 
             except Exception as e: logger.error(f"Ana Döngü Hatası: {e}")
             
-            # Tarama Hızı: 3 Dakika (180 saniye)
             await asyncio.sleep(180) 
 
 if __name__ == "__main__":
