@@ -1,6 +1,6 @@
 """
-V6.6 QUANT MASTER - THE X-RAY
-Özellikler: No Filters (All Minutes), Detailed Row Logging, 40 Match Sniper
+V6.7 QUANT MASTER - THE FINAL DIAGNOSIS
+Özellikler: Raw JSON Logging, Direct Success Check, Indentation Fixed
 """
 
 import asyncio
@@ -48,7 +48,7 @@ def sinyal_hesapla(mac):
     delta_sut = max(0, suanki_sut - gecmis['sut'])
     mac_gecmisi[mac_id] = {'atak': suanki_tehlikeli, 'sut': suanki_sut}
     
-    logger.info(f"🧐 ANALİZ: {mac['ev']} | Dakika: {mac['dakika']} | +{delta_atak} Atak | +{delta_sut} Şut")
+    logger.info(f"🧐 ANALİZ: {mac['ev']} | Atak: +{delta_atak} | Şut: +{delta_sut}")
 
     if not ilk_tarama and delta_atak < 4 and delta_sut < 1: return 0, [], False
     puan = 4.0 if not ilk_tarama else 2.0
@@ -56,21 +56,25 @@ def sinyal_hesapla(mac):
     return round(puan, 1), [f"Atak: +{delta_atak}", f"Şut: +{delta_sut}"], True
 
 # ================================================
-# VERİ MOTORU (FİLTRESİZ)
+# VERİ MOTORU (TEŞHİS ODAKLI)
 # ================================================
-async def mac_detay_cek(session, fixture_id):
+async def mac_detay_cek(session, fixture_id, is_first=False):
     try:
         url = f"https://api.betsapi.com/v3/bet365/event?token={BETSAPI_TOKEN}&FI={fixture_id}"
         async with session.get(url, timeout=15) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if data.get('success') == 1 and data.get('results'):
-                    return data['results'][0]
-                else:
-                    logger.warning(f"⚠️ {fixture_id} için veri yapısı sorunu: {data.get('error')}")
-            elif resp.status == 429: return "LIMIT"
-    except: return None
-    return None
+            data = await resp.json()
+            if is_first:
+                # 🔍 KRİTİK LOG: BetsAPI'nin gönderdiği ham veriyi olduğu gibi görelim
+                logger.info(f"🧪 HAM VERİ TESTİ (FI={fixture_id}): {data}")
+            
+            if data.get('success') == 1 and data.get('results'):
+                return data['results'][0]
+            else:
+                if is_first: logger.error(f"❌ BetsAPI Başarısız Dönüş: {data.get('error')}")
+                return "FAIL"
+    except Exception as e:
+        logger.error(f"⚠️ Bağlantı Hatası: {e}")
+        return None
 
 async def maclari_cek():
     maclar = []
@@ -81,16 +85,15 @@ async def maclari_cek():
             raw_results = data.get('results', [])
             if raw_results and isinstance(raw_results[0], list): raw_results = raw_results[0]
             
-            adaylar = raw_results[:40] 
-            logger.info(f"🎯 X-RAY: {len(raw_results)} maçtan {len(adaylar)} tanesi derin incelemeye alındı...")
+            adaylar = raw_results[:20] # Test için sayıyı 20'ye düşürdüm
+            logger.info(f"🎯 TEŞHİS: {len(raw_results)} maçtan {len(adaylar)} tanesi için ham veri isteniyor...")
 
-            for f in adaylar:
+            for i, f in enumerate(adaylar):
                 m_id = str(f.get('ID', f.get('id', f.get('FI', ''))))
-                detay = await mac_detay_cek(session, m_id)
+                # Sadece ilk maç için ham veri logu bas (is_first=True)
+                detay = await mac_detay_cek(session, m_id, is_first=(i == 0))
                 
-                if detay == "LIMIT":
-                    logger.error("🚫 BetsAPI Limiti Dolu!")
-                    break
+                if detay == "FAIL": continue
                 
                 if detay and isinstance(detay, dict):
                     try:
@@ -98,7 +101,6 @@ async def maclari_cek():
                         stats = detay.get('stats', {})
                         skor = str(detay.get('ss', '0-0'))
                         
-                        # X-RAY MODU: Hiçbir filtreleme (dakika vb.) yapmadan her şeyi listeye ekle
                         maclar.append({
                             'id': m_id, 'ev': detay.get('home', {}).get('name', 'Bilinmiyor'), 
                             'dep': detay.get('away', {}).get('name', 'Bilinmiyor'), 
@@ -111,19 +113,18 @@ async def maclari_cek():
                             'dangerous_attacks_ev': int(stats.get('dangerous_attacks', [0,0])[0]) if stats else 0,
                             'dangerous_attacks_dep': int(stats.get('dangerous_attacks', [0,0])[1]) if stats else 0
                         })
-                        await asyncio.sleep(1.5)
-                    except Exception as e:
-                        logger.error(f"⚠️ Maç verisi işlenemedi: {e}")
+                        await asyncio.sleep(2.0) # Her başarılı işlemde 2 saniye bekle
+                    except: continue
     return maclar
 
 async def ana_dongu():
     threading.Thread(target=run_health_check, daemon=True).start()
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="🔬 V6.6 X-RAY AKTİF\n🔓 Tüm filtreler kaldırıldı.")
+    await bot.send_message(chat_id=CHAT_ID, text="🧪 V6.7 THE FINAL DIAGNOSIS AKTİF\n🧐 Ham veri loglama devrede.")
     while True:
         try:
             maclar = await maclari_cek()
-            logger.info(f"📊 İşlem Tamam: {len(maclar)} maç analize hazır.")
+            logger.info(f"📊 İşlem Bitti: {len(maclar)} maç analize alındı.")
             for mac in maclar:
                 if mac['id'] in bildirim_gonderilen: continue
                 puan, detay_list, gecti = sinyal_hesapla(mac)
@@ -132,7 +133,7 @@ async def ana_dongu():
                     await bot.send_message(chat_id=CHAT_ID, text=mesaj)
                     bildirim_gonderilen[mac['id']] = True
         except Exception as e:
-            logger.error(f"🔴 Hata: {e}")
+            logger.error(f"🔴 Ana Döngü Hatası: {e}")
         await asyncio.sleep(180)
 
 if __name__ == "__main__":
