@@ -1,6 +1,6 @@
 """
-V5.6 QUANT MASTER - DIAGNOSIS RE-FIX
-Özellikler: Syntax Error Resolved, Data Structure Logger, Flexible Sport Filter
+V5.7 QUANT MASTER - THE SOCCER FORCE
+Özellikler: 'NA' Key Filtering (Soccer Fix), 'ID' Case Sensitivity Fix, Turbo Batch
 """
 
 import asyncio
@@ -61,7 +61,6 @@ def sinyal_hesapla(mac):
     return round(puan, 1), [f"Atak: +{delta_atak}", f"Şut: +{delta_sut}"], True
 
 async def bildirim_gonder(bot, mac, puan, detay):
-    # DÜZELTİLEN SATIR: Parantez hatası giderildi
     mesaj = (f"⚽ {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']}\n"
              f"🏆 {mac['lig']} | ⏱️ {mac['dakika']}. DK\n"
              f"📈 PUAN: {puan}\n📝 {', '.join(detay)}")
@@ -69,7 +68,7 @@ async def bildirim_gonder(bot, mac, puan, detay):
     except: pass
 
 # ================================================
-# VERİ MOTORU (TEŞHİS MODU)
+# VERİ MOTORU (LOG ANALİZİNE GÖRE GÜNCELLENDİ)
 # ================================================
 async def mac_detay_cek(session, semaphore, fixture_id):
     async with semaphore:
@@ -94,22 +93,19 @@ async def maclari_cek():
             raw_results = data.get('results', [])
             if raw_results and isinstance(raw_results[0], list): raw_results = raw_results[0]
             
-            # TEŞHİS LOGLARI
-            if raw_results:
-                sample = raw_results[0]
-                logger.info(f"🧪 TEŞHİS - Örnek Veri: {sample}")
-                logger.info(f"🧪 TEŞHİS - Sport ID: {sample.get('sport_id')}")
-
             adaylar = []
             for f in raw_results:
                 if not isinstance(f, dict): continue
-                sid = str(f.get('sport_id'))
-                # Futbol (1) veya herhangi bir spor kimliği yoksa bile ID varsa al (Force Mode)
-                if sid == '1' or not sid:
-                    m_id = str(f.get('id', f.get('FI', '')))
-                    if m_id: adaylar.append(m_id)
+                
+                # LOGDAN GELEN BİLGİYE GÖRE FİLTRELEME (Soccer & ID)
+                # 'NA' Soccer ise veya verinin tipi 'EV' (Event) ise al
+                is_soccer = str(f.get('NA', '')).lower() == 'soccer'
+                m_id = str(f.get('ID', f.get('id', f.get('FI', ''))))
+                
+                if (is_soccer or f.get('type') == 'EV') and m_id:
+                    adaylar.append(m_id)
 
-            logger.info(f"📊 {len(raw_results)} veri arasından {len(adaylar)} futbol adayı belirlendi.")
+            logger.info(f"📊 {len(raw_results)} veri içinden {len(adaylar)} maç belirlendi. İnceleme başlıyor...")
 
             tasks = [mac_detay_cek(session, semaphore, m_id) for m_id in adaylar]
             detaylar = await asyncio.gather(*tasks)
@@ -141,7 +137,7 @@ async def maclari_cek():
 async def ana_dongu():
     threading.Thread(target=run_health_check, daemon=True).start()
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="🧪 V5.6 DIAGNOSIS AKTİF - HATA GİDERİLDİ")
+    await bot.send_message(chat_id=CHAT_ID, text="⚽ V5.7 SOCCER FORCE AKTİF - LOG FIX UYGULANDI")
     while True:
         if aktif_mi():
             maclar = await maclari_cek()
