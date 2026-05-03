@@ -1,6 +1,6 @@
 """
-V6.5 QUANT MASTER - THE CLEANER
-Özellikler: Indentation Error Fixed, Verbose Logging, 40 Match Sniper
+V6.6 QUANT MASTER - THE X-RAY
+Özellikler: No Filters (All Minutes), Detailed Row Logging, 40 Match Sniper
 """
 
 import asyncio
@@ -48,7 +48,7 @@ def sinyal_hesapla(mac):
     delta_sut = max(0, suanki_sut - gecmis['sut'])
     mac_gecmisi[mac_id] = {'atak': suanki_tehlikeli, 'sut': suanki_sut}
     
-    logger.info(f"🧐 ANALİZ: {mac['ev']} | +{delta_atak} Atak | +{delta_sut} Şut")
+    logger.info(f"🧐 ANALİZ: {mac['ev']} | Dakika: {mac['dakika']} | +{delta_atak} Atak | +{delta_sut} Şut")
 
     if not ilk_tarama and delta_atak < 4 and delta_sut < 1: return 0, [], False
     puan = 4.0 if not ilk_tarama else 2.0
@@ -56,7 +56,7 @@ def sinyal_hesapla(mac):
     return round(puan, 1), [f"Atak: +{delta_atak}", f"Şut: +{delta_sut}"], True
 
 # ================================================
-# VERİ MOTORU
+# VERİ MOTORU (FİLTRESİZ)
 # ================================================
 async def mac_detay_cek(session, fixture_id):
     try:
@@ -66,11 +66,10 @@ async def mac_detay_cek(session, fixture_id):
                 data = await resp.json()
                 if data.get('success') == 1 and data.get('results'):
                     return data['results'][0]
-                return None
-            elif resp.status == 429:
-                return "LIMIT"
-    except:
-        return None
+                else:
+                    logger.warning(f"⚠️ {fixture_id} için veri yapısı sorunu: {data.get('error')}")
+            elif resp.status == 429: return "LIMIT"
+    except: return None
     return None
 
 async def maclari_cek():
@@ -83,7 +82,7 @@ async def maclari_cek():
             if raw_results and isinstance(raw_results[0], list): raw_results = raw_results[0]
             
             adaylar = raw_results[:40] 
-            logger.info(f"🎯 Sniper Modu: {len(raw_results)} maçtan {len(adaylar)} tanesi taranıyor...")
+            logger.info(f"🎯 X-RAY: {len(raw_results)} maçtan {len(adaylar)} tanesi derin incelemeye alındı...")
 
             for f in adaylar:
                 m_id = str(f.get('ID', f.get('id', f.get('FI', ''))))
@@ -99,30 +98,32 @@ async def maclari_cek():
                         stats = detay.get('stats', {})
                         skor = str(detay.get('ss', '0-0'))
                         
+                        # X-RAY MODU: Hiçbir filtreleme (dakika vb.) yapmadan her şeyi listeye ekle
                         maclar.append({
-                            'id': m_id, 'ev': detay.get('home', {}).get('name'), 
-                            'dep': detay.get('away', {}).get('name'), 'lig': detay.get('league', {}).get('name', 'Lig'), 
+                            'id': m_id, 'ev': detay.get('home', {}).get('name', 'Bilinmiyor'), 
+                            'dep': detay.get('away', {}).get('name', 'Bilinmiyor'), 
+                            'lig': detay.get('league', {}).get('name', 'Lig'), 
                             'dakika': int(timer.get('tm', 0)) if isinstance(timer, dict) else 0,
                             'ev_gol': int(skor.split('-')[0]) if '-' in skor else 0,
                             'dep_gol': int(skor.split('-')[1]) if '-' in skor else 0,
-                            'shots_on_target_ev': int(stats.get('on_target', [0,0])[0]),
-                            'shots_on_target_dep': int(stats.get('on_target', [0,0])[1]),
-                            'dangerous_attacks_ev': int(stats.get('dangerous_attacks', [0,0])[0]),
-                            'dangerous_attacks_dep': int(stats.get('dangerous_attacks', [0,0])[1])
+                            'shots_on_target_ev': int(stats.get('on_target', [0,0])[0]) if stats else 0,
+                            'shots_on_target_dep': int(stats.get('on_target', [0,0])[1]) if stats else 0,
+                            'dangerous_attacks_ev': int(stats.get('dangerous_attacks', [0,0])[0]) if stats else 0,
+                            'dangerous_attacks_dep': int(stats.get('dangerous_attacks', [0,0])[1]) if stats else 0
                         })
                         await asyncio.sleep(1.5)
-                    except:
-                        continue
+                    except Exception as e:
+                        logger.error(f"⚠️ Maç verisi işlenemedi: {e}")
     return maclar
 
 async def ana_dongu():
     threading.Thread(target=run_health_check, daemon=True).start()
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="✅ V6.5 CLEANER BAŞLATILDI\n🚀 Gözlem başlıyor...")
+    await bot.send_message(chat_id=CHAT_ID, text="🔬 V6.6 X-RAY AKTİF\n🔓 Tüm filtreler kaldırıldı.")
     while True:
         try:
             maclar = await maclari_cek()
-            logger.info(f"📊 Tarama tamamlandı. {len(maclar)} maç analiz ediliyor.")
+            logger.info(f"📊 İşlem Tamam: {len(maclar)} maç analize hazır.")
             for mac in maclar:
                 if mac['id'] in bildirim_gonderilen: continue
                 puan, detay_list, gecti = sinyal_hesapla(mac)
