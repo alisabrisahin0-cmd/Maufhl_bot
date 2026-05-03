@@ -1,8 +1,8 @@
-# MAC ANALIZ BOTU - V8.0 THE TIME KEEPER (ZAMAN MUHAFIZI)
+# MAC ANALIZ BOTU - V8.1 THE SHIELD (ZIRH - 429 ANTI-RATE LIMIT)
 # Özellikler: 
-# 1- Saat Senkronizasyonu (45'te takılı kalan maçları tespit eder)
-# 2- Genişletilmiş Nesine Alt Lig/Amatör Filtresi
-# 3- Çökmeyen Düz Metin AI Motoru
+# 1- 429 Hata Önleyici: Sıralı (Round-Robin) API Kullanımı
+# 2- Otomatik Yeniden Deneme (Retry) ve Zorunlu Dinlenme
+# 3- Saat Senkronizasyonu (45'te takılı kalan maçları tespit eder)
 # 4- Ghost Match (Donuk/Bitik Maç) Dedektörü
 
 import asyncio
@@ -43,6 +43,9 @@ biten_maclar = {}
 mac_gecmisi = {}
 db_pool = None
 
+# SIRALI API SEÇİMİ İÇİN GLOBAL DEĞİŞKEN
+gemini_key_index = 0
+
 # ================================================
 # HEALTH CHECK (RAILWAY)
 # ================================================
@@ -57,7 +60,7 @@ def run_health_check():
     HTTPServer(('0.0.0.0', port), HealthCheckHandler).serve_forever()
 
 # ================================================
-# NESİNE BÜLTEN KONTROLÜ (GÜNCELLENDİ)
+# NESİNE BÜLTEN KONTROLÜ
 # ================================================
 def nesine_uygunluk(lig, ev, dep):
     metin = (lig + " " + ev + " " + dep).lower()
@@ -198,8 +201,6 @@ async def maclari_cek():
                                         ev_kirmizi = int(detay[i+1].get('D1', 0)) if i+1 < len(detay) and str(detay[i+1].get('D1', '')).isdigit() else 0
                                         dep_kirmizi = int(detay[i+2].get('D1', 0)) if i+2 < len(detay) and str(detay[i+2].get('D1', '')).isdigit() else 0
                                 elif t == 'ST':
-                                    # YENİ: ZAMAN SENKRONİZATÖRÜ (STUCK AT 45 FİX)
-                                    # Olay metinlerini ("85' - Sarı Kart") tarar ve en büyük dakikayı alır
                                     la_metin = str(item.get('LA', ''))
                                     match = re.search(r'^(\d+)(?:\+\d+)?\'', la_metin)
                                     if match:
@@ -207,7 +208,6 @@ async def maclari_cek():
                                         if olay_dakikasi > dk:
                                             dk = olay_dakikasi
 
-                            # Aşırı uzun (buga girmiş) maçları engelle
                             if dk > 105:
                                 continue
 
@@ -241,7 +241,6 @@ def sinyal_hesapla(mac):
     gecmis = mac_gecmisi[mac_id]
     delta_korner = max(0, suanki_korner - gecmis['korner'])
     
-    # 👻 DONUK MAÇ (GHOST BUSTER) KONTROLÜ
     if gecmis['dakika'] == dakika:
         gecen_sure = (simdi - gecmis['son_hareket']).total_seconds() / 60
         if gecen_sure > 15 and not mac.get('devre_arasi', False):
@@ -329,15 +328,19 @@ def tavsiye_uret(mac, strateji):
         return "🎯 KESİN TAHMİN: MAÇ SONU DEPLASMAN KAZANIR", "Deplasman ekibi üstünlüğü ele aldı, rakibi çıkartmıyor."
 
 # ================================================
-# GEMİNİ AI (ÇÖKMEYEN DÜZ METİN MOTORU)
+# GEMİNİ AI (429 ZIRHLI MOTOR)
 # ================================================
+async def get_next_gemini_key():
+    global gemini_key_index
+    if not GEMINI_KEYS: return None
+    key = GEMINI_KEYS[gemini_key_index]
+    gemini_key_index = (gemini_key_index + 1) % len(GEMINI_KEYS) # Sırayla 0, 1, 2, 0, 1...
+    return key
+
 async def gemini_analiz(mac, tahmin, neden):
     if not GEMINI_KEYS: 
         return "AI API anahtarı tanımlanmadı.", True
     
-    secilen_key = random.choice(GEMINI_KEYS)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={secilen_key}"
-
     prompt = f"""Sen saha içini okuyan ve çok iddialı, özgün cümleler kuran usta bir canlı bahis analistisin.
 KURAL 1: Bana ASLA maçtaki korneri, skoru veya istatistiği tekrar etme!
 KURAL 2: Her maç için YEPYENİ benzetmeler kullan. Robotik olma.
@@ -349,31 +352,47 @@ Kornerler: Ev: {mac['ev_korner']} - Dep: {mac['dep_korner']}
 Sistem Tahmini: {tahmin}
 
 GÖREV:
-Rakamların arkasındaki "Kırılma Anını" oku. (Örnek: 'Ceza sahasındaki yoğun abluka, savunmanın her an teslim olacağının sinyalini veriyor.')
+Rakamların arkasındaki "Kırılma Anını" oku. 
 Yazdığın 2 cümlelik yorumun EN SONUNA, eğer bu tahmine girmek mantıklıysa "[UYGUN]", maç kilitli ve riskliyse "[RİSKLİ]" yaz.
 Başka hiçbir şey ekleme."""
 
-    try:
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}], 
-            "generationConfig": {"temperature": 0.9} 
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=15) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    text = data['candidates'][0]['content']['parts'][0]['text'].strip()
-                    
-                    gir = True
-                    if "[RİSKLİ]" in text.upper():
-                        gir = False
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}], 
+        "generationConfig": {"temperature": 0.9} 
+    }
+
+    # 429 KORUMA ZIRHI: Hata alırsa 5 saniye bekleyip sıradaki anahtarı dener (Maks 3 deneme)
+    for deneme in range(3):
+        secilen_key = await get_next_gemini_key()
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={secilen_key}"
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=15) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        text = data['candidates'][0]['content']['parts'][0]['text'].strip()
                         
-                    text = text.replace("[UYGUN]", "").replace("[RİSKLİ]", "").replace("[uygun]", "").replace("[riskli]", "").strip()
-                    return text, gir
-                else:
-                    logger.error(f"Gemini API Hatası: {resp.status}")
-    except Exception as e: 
-        pass
+                        gir = True
+                        if "[RİSKLİ]" in text.upper():
+                            gir = False
+                            
+                        text = text.replace("[UYGUN]", "").replace("[RİSKLİ]", "").replace("[uygun]", "").replace("[riskli]", "").strip()
+                        
+                        # BAŞARILI BİLE OLSA 3 SANİYE BEKLE (Rate Limit Koruması)
+                        await asyncio.sleep(3)
+                        return text, gir
+                        
+                    elif resp.status == 429:
+                        logger.warning(f"⚠️ Gemini 429 Hatası (Kota Dolu) - Deneme {deneme+1}/3. 5sn bekleniyor...")
+                        await asyncio.sleep(5)
+                        continue
+                    else:
+                        logger.error(f"Gemini Hata Kodu: {resp.status}")
+                        break
+        except Exception as e: 
+            logger.error(f"Gemini Bağlantı Hatası: {e}")
+            await asyncio.sleep(2)
     
     alternatifler = [
         "Saha içindeki baskı iyice arttı, savunmanın her an hata yapma ihtimali yüksek.",
@@ -460,7 +479,7 @@ async def ana_dongu():
     try: 
         await bot.send_message(
             chat_id=CHAT_ID, 
-            text="🤖 V8.0 THE TIME KEEPER — AKTİF\n✅ Zaman Senkronizatörü Devrede (Alt Liglerde Saati Doğrular)\n✅ Amatör/Alt Lig Filtreleri Genişletildi\n\nGözlem Başlıyor..."
+            text="🤖 V8.1 THE SHIELD — AKTİF\n✅ 429 Hata Koruyucu Zırh Giyildi\n✅ Round-Robin Sıralı API Devrede\n\nGözlem Başlıyor..."
         )
     except Exception as e: 
         pass
