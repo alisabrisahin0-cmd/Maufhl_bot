@@ -1,6 +1,6 @@
 """
-V5.2 QUANT MASTER - FOOTBALL ONLY (TURBO)
-Özellikler: sport_id=1 Strict Filter, Asynchronous Batch Processing, 3.0 Barajı
+V5.3 QUANT MASTER - THE CLEANER
+Özellikler: Internal Sport Filter, Turbo Batch Processing, Rolling Window, 3.0 Barajı
 """
 
 import asyncio
@@ -13,7 +13,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # ================================================
-# AYARLAR (ÇEVRE DEĞİŞKENLERİ)
+# AYARLAR
 # ================================================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID = os.getenv("CHAT_ID", "")
@@ -27,7 +27,6 @@ bildirim_gonderilen = {}
 mac_gecmisi = {} 
 gol_hafizasi = {} 
 
-# Railway Health Check
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b"Bot Aktif")
@@ -37,7 +36,6 @@ def run_health_check():
     HTTPServer(('0.0.0.0', port), HealthCheckHandler).serve_forever()
 
 def aktif_mi():
-    # Mesai: 13:00 - 00:00 (Adana Saati)
     return 13 <= datetime.now().hour <= 23
 
 # ================================================
@@ -45,7 +43,7 @@ def aktif_mi():
 # ================================================
 def sinyal_hesapla(mac):
     mac_id = mac['id']; dakika = max(mac.get('dakika', 1), 1)
-    ev_gol = mac.get('ev_gol', 0); dep_gol = mac.get('dep_gol', 0); son_gol = mac.get('son_gol', 0)
+    ev_gol = mac.get('ev_gol', 0); dep_gol = mac.get('dep_gol', 0)
     
     suanki_tehlikeli = mac.get('dangerous_attacks_ev', 0) + mac.get('dangerous_attacks_dep', 0)
     suanki_sut = mac.get('shots_on_target_ev', 0) + mac.get('shots_on_target_dep', 0)
@@ -56,25 +54,21 @@ def sinyal_hesapla(mac):
     delta_sut = max(0, suanki_sut - gecmis['sut'])
     mac_gecmisi[mac_id] = {'atak': suanki_tehlikeli, 'sut': suanki_sut}
     
-    # 20. dakikadan sonra ivme yoksa pas geç
     if not ilk_tarama and delta_atak < 7 and delta_sut < 1 and dakika > 20: return 0, [], False
 
     puan = 4.0 if not ilk_tarama else 2.0
     puan += (suanki_sut * 0.5)
-    if 65 <= dakika <= 75: puan += 3.5
-    
     return round(puan, 1), [f"Atak: +{delta_atak}", f"Şut: +{delta_sut}"], True
 
 async def bildirim_gonder(bot, mac, puan, detay):
     mesaj = (f"⚽ {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']}\n"
-             f"🏆 {mac['lig']}\n"
-             f"⏱️ {mac['dakika']}. DK | 📈 PUAN: {puan}\n"
-             f"📝 {', '.join(detay)}\n💡 POZİSYON: GOL OLACAK (S)")
+             f"🏆 {mac['lig']} | ⏱️ {mac['dakika']}. DK\n"
+             f"📈 PUAN: {puan}\n📝 {', '.join(detay)}")
     try: await bot.send_message(chat_id=CHAT_ID, text=mesaj)
     except: pass
 
 # ================================================
-# TURBO VERİ MOTORU (SADECE FUTBOL)
+# VERİ MOTORU (İÇ FİLTRELEME SİSTEMİ)
 # ================================================
 async def mac_detay_cek(session, semaphore, fixture_id):
     async with semaphore:
@@ -91,8 +85,7 @@ async def maclari_cek():
     maclar = []
     semaphore = asyncio.Semaphore(15) 
     async with aiohttp.ClientSession() as session:
-        # SPORT_ID=1 ile SADECE FUTBOL ÇEKİLİYOR
-        list_url = f"https://api.betsapi.com/v3/bet365/inplay?token={BETSAPI_TOKEN}&sport_id=1"
+        list_url = f"https://api.betsapi.com/v3/bet365/inplay?token={BETSAPI_TOKEN}"
         async with session.get(list_url, timeout=10) as resp:
             data = await resp.json()
             if data.get('success') != 1: return []
@@ -100,13 +93,17 @@ async def maclari_cek():
             raw_results = data.get('results', [])
             if raw_results and isinstance(raw_results[0], list): raw_results = raw_results[0]
             
-            logger.info(f"⚽ {len(raw_results)} Futbol Maçı Analiz Ediliyor...")
-
+            # İÇ FİLTRE: 1969 maçtan sadece sport_id: 1 olanları (Futbol) ayıkla
             adaylar = []
             for f in raw_results:
                 if not isinstance(f, dict): continue
+                # sport_id 1 değilse (tenis, basket vb.) saniyede pas geç
+                if str(f.get('sport_id')) != '1': continue
+                
                 m_id = str(f.get('id', f.get('FI', '')))
                 if m_id: adaylar.append(m_id)
+
+            logger.info(f"⚽ Kalabalık Dağıtıldı: 1969 maç arasından {len(adaylar)} Futbol maçı seçildi.")
 
             tasks = [mac_detay_cek(session, semaphore, m_id) for m_id in adaylar]
             detaylar = await asyncio.gather(*tasks)
@@ -117,7 +114,6 @@ async def maclari_cek():
                     dk = int(detay.get('timer', {}).get('tm', 0))
                     if not (5 <= dk <= 88): continue
                     
-                    m_id = str(detay.get('id', ''))
                     stats = detay.get('stats', {}); skor = detay.get('ss', '0-0')
                     ev_gol, dep_gol = map(int, skor.split('-')) if '-' in skor else (0, 0)
                     
@@ -126,9 +122,9 @@ async def maclari_cek():
                         return int(v[idx]) if isinstance(v, list) and len(v) > idx else 0
 
                     maclar.append({
-                        'id': m_id, 'ev': detay.get('home', {}).get('name'), 'dep': detay.get('away', {}).get('name'),
-                        'lig': detay.get('league', {}).get('name', 'Lig'), 'dakika': dk, 
-                        'ev_gol': ev_gol, 'dep_gol': dep_gol,
+                        'id': str(detay.get('id', '')), 'ev': detay.get('home', {}).get('name'), 
+                        'dep': detay.get('away', {}).get('name'), 'lig': detay.get('league', {}).get('name', 'Lig'), 
+                        'dakika': dk, 'ev_gol': ev_gol, 'dep_gol': dep_gol,
                         'shots_on_target_ev': gs('on_target', 0), 'shots_on_target_dep': gs('on_target', 1),
                         'dangerous_attacks_ev': gs('dangerous_attacks', 0), 'dangerous_attacks_dep': gs('dangerous_attacks', 1)
                     })
@@ -138,7 +134,7 @@ async def maclari_cek():
 async def ana_dongu():
     threading.Thread(target=run_health_check, daemon=True).start()
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="⚽ V5.2 QUANT MASTER SADECE FUTBOL MODUNDA AKTİF")
+    await bot.send_message(chat_id=CHAT_ID, text="⚽ V5.3 THE CLEANER AKTİF (FUTBOL FİLTRESİ)")
     while True:
         if aktif_mi():
             maclar = await maclari_cek()
