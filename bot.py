@@ -1,6 +1,6 @@
 """
-V4.9 QUANT MASTER - THE UNBREAKABLE (BETSAPI v3 COMPLIANT)
-Özellikler: UnboundLocalError Fix, Two-Step Fetch, Rolling Window, Cold Start Fix
+V5.0 QUANT MASTER - THE SHIELD (BETSAPI v3 COMPLIANT)
+Özellikler: List-Object Flattening Fix, Two-Step Fetch, Rolling Window, 3.0 Barajı
 """
 
 import asyncio
@@ -92,7 +92,7 @@ def sinyal_hesapla(mac):
 async def gemini_analiz(mac):
     global current_key_index
     valid_keys = [k for k in GEMINI_KEYS if k]
-    if not valid_keys: return "Analiz hazır."
+    if not valid_keys: return "Momentum devam ediyor."
     
     prompt = f"MAÇ: {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']} | DK: {mac['dakika']}\nİvme saptandı. 2 cümle Türkçe yorumla."
     
@@ -107,7 +107,7 @@ async def gemini_analiz(mac):
                         return data['candidates'][0]['content']['parts'][0]['text'].strip()
         except: pass
         current_key_index = (current_key_index + 1) % len(valid_keys)
-    return "Momentum yüksek, ataklar devam ediyor."
+    return "Momentum yüksek."
 
 async def bildirim_gonder(bot, mac, puan, detay, ai_yorum):
     kasa = 3.0 if puan >= 12 else 2.0 if puan >= 10 else 1.5
@@ -123,7 +123,7 @@ async def bildirim_gonder(bot, mac, puan, detay, ai_yorum):
     except: pass
 
 # ================================================
-# VERİ ÇEKME MOTORU (FIXED & SECURE)
+# VERİ ÇEKME MOTORU (V5.0 - FLATTENING FIX)
 # ================================================
 async def mac_detay_cek(session, fixture_id):
     try:
@@ -131,9 +131,10 @@ async def mac_detay_cek(session, fixture_id):
         async with session.get(url, timeout=5) as resp:
             data = await resp.json()
             if data.get('success') == 1 and data.get('results'):
-                return data['results'][0]
-    except Exception as e:
-        logger.error(f"Detay Çekme Hatası (ID {fixture_id}): {e}")
+                res = data['results']
+                # Eğer sonuç bir liste içindeyse ilkini al
+                return res[0] if isinstance(res, list) and len(res) > 0 else res
+    except: pass
     return None
 
 async def maclari_cek():
@@ -141,26 +142,29 @@ async def maclari_cek():
     if not BETSAPI_TOKEN: return maclar
     try:
         async with aiohttp.ClientSession() as session:
-            # Futbol filtresi (sport_id=1) eklendi
             list_url = f"https://api.betsapi.com/v3/bet365/inplay?token={BETSAPI_TOKEN}&sport_id=1"
             async with session.get(list_url, timeout=10) as resp:
                 data = await resp.json()
-                if data.get('success') != 1: 
-                    logger.warning(f"Liste Çekme Başarısız: {data.get('error')}")
-                    return maclar
+                if data.get('success') != 1: return maclar
                 
                 raw_results = data.get('results', [])
-                logger.info(f"💎 Sahadaki Toplam Maç Listesi Alındı: {len(raw_results)}")
+                # FIX: Eğer sonuçlar liste içinde liste olarak geliyorsa düzleştir
+                if raw_results and isinstance(raw_results[0], list):
+                    raw_results = raw_results[0]
+                
+                logger.info(f"💎 Sahada Toplam {len(raw_results)} maç taramaya uygun.")
 
                 for f in raw_results:
-                    # FIX: UnboundLocalError engelleyici başlangıç
-                    m_id = "Bilinmiyor" 
+                    m_id = "Bilinmiyor"
                     try:
+                        # f'in bir sözlük olduğundan emin ol
+                        if not isinstance(f, dict): continue
+                        
                         m_id = str(f.get('id', f.get('FI', '')))
                         if not m_id or m_id == "Bilinmiyor": continue
                         
                         detay = await mac_detay_cek(session, m_id)
-                        if not detay: continue
+                        if not detay or not isinstance(detay, dict): continue
 
                         timer = detay.get('timer', {})
                         dk = int(timer.get('tm', 0)) if isinstance(timer, dict) else 0
@@ -187,10 +191,10 @@ async def maclari_cek():
                             'dangerous_attacks_ev': gs('dangerous_attacks', 0), 'dangerous_attacks_dep': gs('dangerous_attacks', 1)
                         })
                     except Exception as e:
-                        logger.error(f"Maç döngü içi hata (ID: {m_id}): {e}")
+                        logger.error(f"Döngü hatası (ID: {m_id}): {e}")
                         continue
     except Exception as e: 
-        logger.error(f"Motor Ana Hatası: {e}")
+        logger.error(f"Motor Hatası: {e}")
     return maclar
 
 # ================================================
@@ -199,7 +203,7 @@ async def maclari_cek():
 async def ana_dongu():
     threading.Thread(target=run_health_check, daemon=True).start()
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text=f"🤖 V4.9 QUANT MASTER AKTİF\n\n✅ Zincirleme Hata Koruması Devrede\n🎯 Min Puan: {MIN_PUAN}")
+    await bot.send_message(chat_id=CHAT_ID, text=f"🤖 V5.0 QUANT MASTER AKTİF\n\n🛡️ Veri Yapısı Koruması Devrede\n🎯 Min Puan: {MIN_PUAN}")
     while True:
         try:
             if aktif_mi():
