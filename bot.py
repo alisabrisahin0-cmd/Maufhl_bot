@@ -62,7 +62,7 @@ def nesine_kontrol(lig_adi):
 
 def aktif_mi():
     simdi = datetime.now()
-    return 14 <= simdi.hour <= 23
+    return 13 <= simdi.hour <= 23
 
 # ================================================
 # V4.0 YENİ KANTİTATİF DEKONSTRÜKSİYON FİLTRELERİ
