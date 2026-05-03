@@ -1,6 +1,6 @@
 """
-V5.7 QUANT MASTER - THE SOCCER FORCE
-Özellikler: 'NA' Key Filtering (Soccer Fix), 'ID' Case Sensitivity Fix, Turbo Batch
+V5.8 QUANT MASTER - THE STABILIZER
+Özellikler: Increased Timeout (30s), Error Recovery, 343 Match Optimization, 3.0 Barajı
 """
 
 import asyncio
@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 
 bildirim_gonderilen = {}
 mac_gecmisi = {} 
-gol_hafizasi = {} 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -39,11 +38,10 @@ def aktif_mi():
     return 13 <= datetime.now().hour <= 23
 
 # ================================================
-# ANALİZ VE BİLDİRİM
+# ANALİZ MOTORU
 # ================================================
 def sinyal_hesapla(mac):
     mac_id = mac['id']; dakika = max(mac.get('dakika', 1), 1)
-    ev_gol = mac.get('ev_gol', 0); dep_gol = mac.get('dep_gol', 0)
     
     suanki_tehlikeli = mac.get('dangerous_attacks_ev', 0) + mac.get('dangerous_attacks_dep', 0)
     suanki_sut = mac.get('shots_on_target_ev', 0) + mac.get('shots_on_target_dep', 0)
@@ -54,7 +52,8 @@ def sinyal_hesapla(mac):
     delta_sut = max(0, suanki_sut - gecmis['sut'])
     mac_gecmisi[mac_id] = {'atak': suanki_tehlikeli, 'sut': suanki_sut}
     
-    if not ilk_tarama and delta_atak < 4 and delta_sut < 1 and dakika > 20: return 0, [], False
+    # İvme yoksa bildirim gönderme
+    if not ilk_tarama and delta_atak < 4 and delta_sut < 1: return 0, [], False
 
     puan = 4.0 if not ilk_tarama else 2.0
     puan += (suanki_sut * 0.5)
@@ -68,13 +67,14 @@ async def bildirim_gonder(bot, mac, puan, detay):
     except: pass
 
 # ================================================
-# VERİ MOTORU (LOG ANALİZİNE GÖRE GÜNCELLENDİ)
+# VERİ MOTORU (GÜÇLENDİRİLMİŞ BAĞLANTI)
 # ================================================
 async def mac_detay_cek(session, semaphore, fixture_id):
     async with semaphore:
         try:
             url = f"https://api.betsapi.com/v3/bet365/event?token={BETSAPI_TOKEN}&FI={fixture_id}"
-            async with session.get(url, timeout=5) as resp:
+            # Zaman aşımı 30 saniyeye çıkarıldı
+            async with session.get(url, timeout=30) as resp:
                 data = await resp.json()
                 if data.get('success') == 1 and data.get('results'):
                     res = data['results']
@@ -83,29 +83,22 @@ async def mac_detay_cek(session, semaphore, fixture_id):
 
 async def maclari_cek():
     maclar = []
-    semaphore = asyncio.Semaphore(10) 
+    semaphore = asyncio.Semaphore(5) # Daha yavaş ama daha stabil sorgu
     async with aiohttp.ClientSession() as session:
         list_url = f"https://api.betsapi.com/v3/bet365/inplay?token={BETSAPI_TOKEN}"
-        async with session.get(list_url, timeout=10) as resp:
+        async with session.get(list_url, timeout=20) as resp:
             data = await resp.json()
-            if data.get('success') != 1: return []
-            
             raw_results = data.get('results', [])
             if raw_results and isinstance(raw_results[0], list): raw_results = raw_results[0]
             
             adaylar = []
             for f in raw_results:
                 if not isinstance(f, dict): continue
-                
-                # LOGDAN GELEN BİLGİYE GÖRE FİLTRELEME (Soccer & ID)
-                # 'NA' Soccer ise veya verinin tipi 'EV' (Event) ise al
-                is_soccer = str(f.get('NA', '')).lower() == 'soccer'
-                m_id = str(f.get('ID', f.get('id', f.get('FI', ''))))
-                
-                if (is_soccer or f.get('type') == 'EV') and m_id:
-                    adaylar.append(m_id)
+                if str(f.get('NA', '')).lower() == 'soccer' or f.get('type') == 'EV':
+                    m_id = str(f.get('ID', f.get('id', f.get('FI', ''))))
+                    if m_id: adaylar.append(m_id)
 
-            logger.info(f"📊 {len(raw_results)} veri içinden {len(adaylar)} maç belirlendi. İnceleme başlıyor...")
+            logger.info(f"📊 {len(adaylar)} Futbol maçı derin incelemeye alınıyor...")
 
             tasks = [mac_detay_cek(session, semaphore, m_id) for m_id in adaylar]
             detaylar = await asyncio.gather(*tasks)
@@ -137,16 +130,19 @@ async def maclari_cek():
 async def ana_dongu():
     threading.Thread(target=run_health_check, daemon=True).start()
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="⚽ V5.7 SOCCER FORCE AKTİF - LOG FIX UYGULANDI")
+    await bot.send_message(chat_id=CHAT_ID, text="⚙️ V5.8 STABILIZER AKTİF - TIMEOUT FIX UYGULANDI")
     while True:
         if aktif_mi():
-            maclar = await maclari_cek()
-            for mac in maclar:
-                if mac['id'] in bildirim_gonderilen: continue
-                puan, detay_list, gecti = sinyal_hesapla(mac)
-                if gecti and puan >= MIN_PUAN:
-                    await bildirim_gonder(bot, mac, puan, detay_list)
-                    bildirim_gonderilen[mac['id']] = True
+            try:
+                maclar = await maclari_cek()
+                for mac in maclar:
+                    if mac['id'] in bildirim_gonderilen: continue
+                    puan, detay_list, gecti = sinyal_hesapla(mac)
+                    if gecti and puan >= MIN_PUAN:
+                        await bildirim_gonder(bot, mac, puan, detay_list)
+                        bildirim_gonderilen[mac['id']] = True
+            except Exception as e:
+                logger.error(f"Ana döngü hatası: {e}")
         await asyncio.sleep(180)
 
 if __name__ == "__main__":
