@@ -3,4 +3,4 @@ aiohttp==3.9.1
 asyncpg==0.29.0
 aiohttp
 python-telegram-bot
-google-generativeai
+google-genai
