@@ -1,5 +1,5 @@
-# MAC ANALIZ BOTU - V13.6-KURTARICI
-# Hata Çözümü: 'list' object has no attribute 'get' hatası giderildi.
+# MAC ANALIZ BOTU - V13.8-KESİN ÇÖZÜM
+# Yenilik: Sadece veri okuma hatası giderildi. Kurallar sabit tutuldu.
 
 import asyncio
 import aiohttp
@@ -23,6 +23,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 bildirim_gonderilen = {}
+mac_atak_gecmisi = {}
 key_index = 0
 
 def safe_int(val):
@@ -42,34 +43,54 @@ async def get_ai_commentary(ev, dep, dk, skor, sot, da_ev, da_dep, lig):
         prompt = f"Analiz: {ev} {skor} {dep} | Dk: {dk}. Taktiksel yorum yap."
         response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         return response.text
-    except: return "AI meşgul."
+    except: return "AI analiz edemedi."
 
 async def analiz_et(mac_detay, m_id):
     ev_adi = "Ev"; dep_adi = "Dep"; dk = 0; skor = "0-0"; ev_sot = 0; dep_sot = 0; ev_da = 0; dep_da = 0; lig = "Lig"
 
-    for item in mac_detay:
-        if not isinstance(item, dict): continue
-        if item.get('type') == 'EV':
+    # VERİ ZIRHI: BetsAPI ne gönderirse göndersin içinden verileri söküp alır.
+    veri_listesi = []
+    if isinstance(mac_detay, list):
+        for x in mac_detay:
+            if isinstance(x, dict): veri_listesi.append(x)
+            elif isinstance(x, list):
+                for y in x:
+                    if isinstance(y, dict): veri_listesi.append(y)
+    elif isinstance(mac_detay, dict):
+        veri_listesi.append(mac_detay)
+
+    for item in veri_listesi:
+        t = item.get('type')
+        if t == 'EV':
             names = item.get('NA', '').split(' v ')
             ev_adi = names[0] if len(names) > 0 else "Ev"
             dep_adi = names[1] if len(names) > 1 else "Dep"
             dk = safe_int(item.get('TM', 0))
             skor = item.get('SS', '0-0')
             lig = item.get('CT', 'Lig')
-        elif item.get('type') == 'TE':
+        elif t == 'TE':
             if item.get('ID') == '1':
                 ev_sot = safe_int(item.get('S1', 0)); ev_da = safe_int(item.get('S4', 0))
             elif item.get('ID') == '2':
                 dep_sot = safe_int(item.get('S1', 0)); dep_da = safe_int(item.get('S4', 0))
 
+    # Kural: Sadece 20 ile 85 dk arası
     if not (20 <= dk <= 85): return None
 
     ev_gol = safe_int(skor.split('-')[0]) if '-' in skor else 0
     dep_gol = safe_int(skor.split('-')[1]) if '-' in skor else 0
     
-    puan = 4.0 
+    puan = 4.0 # Zaman puanı
     onayli_skorlar = [(1,1), (2,2), (0,1), (2,0), (2,1), (1,2), (0,0)]
     if (ev_gol, dep_gol) in onayli_skorlar: puan += 3.0
+    
+    # Atak İvmesi (Delta)
+    toplam_da = ev_da + dep_da
+    onceki_atak = mac_atak_gecmisi.get(m_id, toplam_da)
+    delta_atak = toplam_da - onceki_atak
+    mac_atak_gecmisi[m_id] = toplam_da
+    if delta_atak >= 5: puan += 2.0
+
     if abs(ev_gol - dep_gol) >= 3: return None
 
     if puan >= 4.0:
@@ -82,7 +103,7 @@ async def analiz_et(mac_detay, m_id):
 
 async def ana_dongu():
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="✅ V13.6 KURTARICI AKTİF: List hatası onarıldı, maçlar aranıyor.")
+    await bot.send_message(chat_id=CHAT_ID, text="⚙️ V13.8 KESİN ÇÖZÜM: Veri okuma zırhı devrede, maçlar taranıyor.")
     async with aiohttp.ClientSession() as session:
         while True:
             try:
@@ -90,12 +111,11 @@ async def ana_dongu():
                     data = await r.json()
                     res = data.get('results', [])
                 
-                # İŞTE PATLAYAN YERİN ÇÖZÜMÜ
-                if res and isinstance(res[0], list): 
+                if res and isinstance(res, list) and len(res) > 0 and isinstance(res[0], list): 
                     res = res[0]
 
                 for m in res:
-                    if not isinstance(m, dict): continue # Güvenlik zırhı
+                    if not isinstance(m, dict): continue
                     m_id = str(m.get('FI') or m.get('ID'))
                     if not m_id or m_id in bildirim_gonderilen: continue
                     
@@ -107,7 +127,7 @@ async def ana_dongu():
                                 await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
                                 bildirim_gonderilen[m_id] = True
             except Exception as e: 
-                logger.error(f"Döngü Hatası: {e}")
+                logger.error(f"Sistem Hatası: {e}")
             await asyncio.sleep(120)
 
 if __name__ == "__main__":
