@@ -1,5 +1,5 @@
-# MAC ANALIZ BOTU - V12.1-TEMİZ GÜNCELLEME
-# Hatalar giderildi; 1-1, 2-2 skorları, 25-65 dk ve Delta 7 devrede.
+# MAC ANALIZ BOTU - V12.2 HASSAS TAKİP
+# Hedef: 3 Puan barajı ve neden bildirim gelmediğini açıklayan loglar.
 
 import asyncio
 import aiohttp
@@ -38,61 +38,52 @@ async def analiz_et(mac_detay, m_id):
                 dep_da = int(item.get('S4', 0))
 
     toplam_da = ev_da + dep_da
-    toplam_sot = ev_sot + dep_sot
     ev_gol = int(skor.split('-')[0]) if '-' in skor else 0
     dep_gol = int(skor.split('-')[1]) if '-' in skor else 0
     fark = abs(ev_gol - dep_gol)
 
+    # --- HASSAS FİLTRELER ---
     puan = 0.0
-    detaylar = []
-
-    # 1. Genişletilmiş Zaman (25-65 dk)
-    if 25 <= dk <= 65:
+    
+    # Zaman Penceresi Kontrolü
+    if 20 <= dk <= 85: # Aralığı iyice genişlettik (20-85 dk)
         puan += 4.0
-        detaylar.append(f"⏱️ Zaman Uygun ({dk}') +4.0")
     else:
+        logger.info(f"⏭️ {ev_adi} elendi: Dakika ({dk}) kapsam dışı.")
         return None
 
-    # 2. Genişletilmiş Skor Filtresi
+    # Skor ve Fark Blokları
+    if fark >= 3:
+        logger.info(f"⏭️ {ev_adi} elendi: Fark çok açık ({skor}).")
+        return None
+    if (ev_gol + dep_gol) >= 6:
+        logger.info(f"⏭️ {ev_adi} elendi: Çok fazla gol var.")
+        return None
+
+    # Skor Bonusu (1-1, 2-2, 0-0 vb.)
     onayli_skorlar = [(1,1), (2,2), (0,1), (2,0), (2,1), (1,2), (0,0)]
     if (ev_gol, dep_gol) in onayli_skorlar:
         puan += 3.0
-        detaylar.append(f"🎯 Kritik Skor ({skor}) +3.0")
-        if (ev_gol, dep_gol) == (1,1): 
-            puan += 1.0 # 1-1 için bonus
-            detaylar.append("⭐ 1-1 Bonus +1.0")
 
-    # 3. İvme (Delta 7)
+    # İvme (Delta 5'e çekildi)
     onceki_atak = mac_atak_gecmisi.get(m_id, toplam_da)
     delta_atak = toplam_da - onceki_atak
     mac_atak_gecmisi[m_id] = toplam_da
-
-    if delta_atak >= 7:
+    if delta_atak >= 5:
         puan += 2.0
-        detaylar.append(f"🚀 Atak İvmesi (Δ:{delta_atak}) +2.0")
 
-    # 4. SOT ve Genel Bloklar
-    if toplam_sot <= 8:
-        puan += 1.0
-    if fark >= 3 or (ev_gol + dep_gol) >= 5: 
-        return None
-
-    if puan >= 6.0:
+    # BİLDİRİM EŞİĞİ (Sizin istediğiniz gibi 3.0)
+    if puan >= 3.0:
         return {
-            "mesaj": (f"💎 STRATEJİK SİNYAL\n{ev_adi} {skor} {dep_adi}\n"
-                      f"Dakika: {dk} | Lig: {lig}\n"
-                      f"--------------------\n"
-                      f"Puan: {puan}/12\n"
-                      f"Analiz: {', '.join(detaylar)}\n"
-                      f"--------------------\n"
-                      f"SOT: {ev_sot}/{dep_sot} | DA: {ev_da}/{dep_da}\n"
-                      f"💡 Tavsiye: SIRADAKİ GOL (S)")
+            "mesaj": (f"🔔 SİNYAL (Puan: {puan})\n{ev_adi} {skor} {dep_adi}\n"
+                      f"Dakika: {dk} | SOT: {ev_sot+dep_sot}\n"
+                      f"Tavsiye: Sıradaki Gol")
         }
     return None
 
 async def ana_dongu():
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="🚀 V12.1 TEMİZ KURULUM TAMAMLANDI\nStratejik esneklik ve delta takibi aktif.")
+    await bot.send_message(chat_id=CHAT_ID, text="✅ V12.2 AKTİF: Bildirim eşiği 3.0, zaman 20-85 dk.")
 
     async with aiohttp.ClientSession() as session:
         while True:
@@ -100,6 +91,7 @@ async def ana_dongu():
                 async with session.get(f"https://api.betsapi.com/v3/bet365/inplay_filter?token={BETSAPI_TOKEN}&sport_id=1") as r:
                     list_data = await r.json()
                     results = list_data.get('results', [[]])[0]
+                    logger.info(f"📡 {len(results)} maç taranıyor...")
 
                 for m in results:
                     m_id = str(m.get('FI') or m.get('ID'))
@@ -112,7 +104,8 @@ async def ana_dongu():
                             if sonuc:
                                 await bot.send_message(chat_id=CHAT_ID, text=sonuc['mesaj'])
                                 bildirim_gonderilen[m_id] = True
-            except: pass
+            except Exception as e:
+                logger.error(f"Hata: {e}")
             await asyncio.sleep(120)
 
 if __name__ == "__main__":
