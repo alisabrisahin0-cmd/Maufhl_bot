@@ -1,5 +1,5 @@
-# MAC ANALIZ BOTU - V12-STRATEJİK GÜNCELLEME
-# [span_2](start_span)Güncelleme: Skor Genişletme (1-1, 2-2), Zaman (25-65') ve İvme (Delta 7)[span_2](end_span)
+# MAC ANALIZ BOTU - V12.1-TEMİZ GÜNCELLEME
+# Hatalar giderildi; 1-1, 2-2 skorları, 25-65 dk ve Delta 7 devrede.
 
 import asyncio
 import aiohttp
@@ -15,7 +15,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 bildirim_gonderilen = {}
-# Maçların bir önceki taramadaki tehlikeli atak sayılarını tutar (Delta hesabı için)
 mac_atak_gecmisi = {} 
 
 async def analiz_et(mac_detay, m_id):
@@ -31,10 +30,10 @@ async def analiz_et(mac_detay, m_id):
             skor = item.get('SS', '0-0')
             lig = item.get('CT', 'Lig')
         elif t == 'TE':
-            if item.get('ID') == '1': # Ev Sahibi
+            if item.get('ID') == '1':
                 ev_sot = int(item.get('S1', 0))
                 ev_da = int(item.get('S4', 0))
-            elif item.get('ID') == '2': # Deplasman
+            elif item.get('ID') == '2':
                 dep_sot = int(item.get('S1', 0))
                 dep_da = int(item.get('S4', 0))
 
@@ -44,49 +43,43 @@ async def analiz_et(mac_detay, m_id):
     dep_gol = int(skor.split('-')[1]) if '-' in skor else 0
     fark = abs(ev_gol - dep_gol)
 
-    # -[span_3](start_span)-- YENİ STRATEJİK FİLTRELER[span_3](end_span) ---
     puan = 0.0
     detaylar = []
 
-    # 1. [span_4](start_span)Genişletilmiş Zaman Penceresi (25-65 dk)[span_4](end_span)
-    # [span_5](start_span)Verilerdeki 24, 25, 36, 45, 48, 54 ve 56. dakikalardaki başarılar baz alındı[span_5](end_span).
+    # 1. Genişletilmiş Zaman (25-65 dk)
     if 25 <= dk <= 65:
         puan += 4.0
         detaylar.append(f"⏱️ Zaman Uygun ({dk}') +4.0")
     else:
-        return None # Belirtilen kritik pencere dışı
+        return None
 
-    # 2. [span_6](start_span)Genişletilmiş Skor Filtresi[span_6](end_span)
-    # [span_7](start_span)En kârlı 1-1 skoru ve diğer başarılı skorlar (2-2, 0-1, 2-0) eklendi[span_7](end_span).
+    # 2. Genişletilmiş Skor Filtresi
     onayli_skorlar = [(1,1), (2,2), (0,1), (2,0), (2,1), (1,2), (0,0)]
     if (ev_gol, dep_gol) in onayli_skorlar:
         puan += 3.0
         detaylar.append(f"🎯 Kritik Skor ({skor}) +3.0")
         if (ev_gol, dep_gol) == (1,1): 
-            [span_8](start_span)puan += 1.0 # 1-1 için ekstra bonus[span_8](end_span)
+            puan += 1.0 # 1-1 için bonus
+            detaylar.append("⭐ 1-1 Bonus +1.0")
 
-    # 3. [span_9](start_span)İvme (Delta) Kontrolü[span_9](end_span)
-    # [span_10](start_span)Atak artış sınırı 10'dan 7'ye çekilerek botun nefes alması sağlandı[span_10](end_span).
+    # 3. İvme (Delta 7)
     onceki_atak = mac_atak_gecmisi.get(m_id, toplam_da)
     delta_atak = toplam_da - onceki_atak
-    mac_atak_gecmisi[m_id] = toplam_da # Güncel atağı kaydet
+    mac_atak_gecmisi[m_id] = toplam_da
 
     if delta_atak >= 7:
         puan += 2.0
         detaylar.append(f"🚀 Atak İvmesi (Δ:{delta_atak}) +2.0")
 
-    # 4. SOT Kontrolü (Hücum Epilasyonu)
+    # 4. SOT ve Genel Bloklar
     if toplam_sot <= 8:
         puan += 1.0
-    elif toplam_sot > 12:
-        puan -= 2.0 # Kısırlık cezası
-
-    # Genel Bloklar
-    if fark >= 3 or (ev_gol + dep_gol) >= 5: return None
+    if fark >= 3 or (ev_gol + dep_gol) >= 5: 
+        return None
 
     if puan >= 6.0:
         return {
-            "mesaj": (f"💎 STRATEJİK SİNYAL (V12)\n{ev_adi} {skor} {dep_adi}\n"
+            "mesaj": (f"💎 STRATEJİK SİNYAL\n{ev_adi} {skor} {dep_adi}\n"
                       f"Dakika: {dk} | Lig: {lig}\n"
                       f"--------------------\n"
                       f"Puan: {puan}/12\n"
@@ -99,7 +92,7 @@ async def analiz_et(mac_detay, m_id):
 
 async def ana_dongu():
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="🚀 V12 AKTİF: Skorlar Genişletildi (1-1/2-2), Zaman 25-65 dk ve Delta 7 olarak güncellendi.")
+    await bot.send_message(chat_id=CHAT_ID, text="🚀 V12.1 TEMİZ KURULUM TAMAMLANDI\nStratejik esneklik ve delta takibi aktif.")
 
     async with aiohttp.ClientSession() as session:
         while True:
