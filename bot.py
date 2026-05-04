@@ -1,4 +1,4 @@
-# MAC ANALIZ BOTU - V9.4 THE STABLE SIGNAL (KARARLI SİNYAL)
+# MAC ANALIZ BOTU - V9.5 THE LIVE VERIFIER (CANLI DOĞRULAYICI)
 # Strateji: Altın Pencere & Hücum Epilasyonu (V9.1 Mimari)
 
 import asyncio
@@ -32,6 +32,7 @@ bildirim_gonderilen = {}
 # ================================================
 async def maclari_cek():
     maclar = []
+    # DIRECT INPLAY: Tek istekte tüm stats gelir
     url = f"https://api.betsapi.com/v1/bet365/inplay?token={BETSAPI_TOKEN}"
     async with aiohttp.ClientSession() as session:
         try:
@@ -63,7 +64,7 @@ async def maclari_cek():
                         })
                     except: continue
         except Exception as e:
-            logger.error(f"Veri çekme hatası: {e}")
+            logger.error(f"Veri çekme hatası: {e}")[cite: 2]
     return maclar
 
 # ================================================
@@ -76,24 +77,29 @@ def strateji_filtrele(mac):
     toplam_korner = mac['ev_korner'] + mac['dep_korner']
     toplam_da = mac['ev_da'] + mac['dep_da']
 
+    # HARD BLOCKS[cite: 1]
     if toplam_gol >= 5: return 0.0, [], "KAOS_ESIGI"
     if fark >= 3: return 0.0, [], "OLUM_BOLGESI"
     
     puan = 0.0; detay = []
 
+    # ALTIN PENCERE[cite: 1]
     if 55 <= dk <= 60:
         puan += 4.0; detay.append("ALTIN PENCERE (55-60') +4.0")
     elif 60 < dk <= 75:
         puan += 2.0; detay.append("GECIS OYUNU EVRESI +2.0")
 
+    # OPTIMUM SKOR[cite: 1]
     if (ev_gol, dep_gol) in [(2,1), (1,2), (3,1), (1,3)]:
         puan += 2.0; detay.append(f"OPTIMUM SKOR ({ev_gol}-{dep_gol}) +2.0")
 
+    # SOT CEZA (HÜCUM EPİLASYONU)[cite: 1]
     if toplam_sot <= 8:
         puan += (toplam_sot * 0.25); detay.append(f"MAKUL SUT SEVIYESI ({toplam_sot})")
     else:
         puan -= 1.5; detay.append("HUCUM EPILASYONU (SOT > 8) CEZA!")
 
+    # KORNER VE ATAK[cite: 1]
     if toplam_korner > 12:
         puan -= 1.0; detay.append("ETKISIZ KORNER BASKISI -1.0")
     if toplam_da > 80:
@@ -102,59 +108,50 @@ def strateji_filtrele(mac):
     return round(puan, 1), detay, "SUCCESS"
 
 # ================================================
-# ORACLE AI VE BİLDİRİM SİSTEMİ
+# BİLDİRİM SİSTEMİ
 # ================================================
-async def gemini_oracle(mac):
-    if not GEMINI_KEYS: return "Analiz uygun.", True
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={random.choice(GEMINI_KEYS)}"
-    prompt = f"Analist olarak bu maci yorumla: {mac['ev']}-{mac['dep']} ({mac['dakika']}. dk) | SOT: {mac['ev_sot']}+{mac['dep_sot']}. JSON: {{\"yorum\": \"...\", \"gir\": true}}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json"}}, timeout=10) as resp:
-                data = await resp.json(); res = json.loads(data['candidates'][0]['content']['parts'][0]['text'])
-                return res['yorum'], res['gir']
-    except: return "Istatistikler kirilma noktasinda.", True
-
 async def bildirim_gonder(bot, mac, puan, detay):
-    ai_yorum, ai_gir = await gemini_oracle(mac)
-    if not ai_gir: return
-    
-    tavsiye = "ALTIN FIRSAT" if 55 <= mac['dakika'] <= 60 else "STRATEJIK SINYAL"
-    
-    # Karakter hatasını önlemek için güvenli format
+    tavsiye = "💎 ALTIN FIRSAT" if 55 <= mac['dakika'] <= 60 else "🔥 STRATEJIK SINYAL"
     mesaj = (
         f"🤖 {tavsiye}\n"
         f"Maç: {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']}\n"
         f"Dakika: {mac['dakika']} | Lig: {mac['lig']}\n"
         f"--------------------\n"
-        f"Strateji Puanı: {puan}/12\n"
+        f"Puan: {puan}/12\n"
         f"Analiz: " + ", ".join(detay) + "\n"
         f"--------------------\n"
         f"Veri: SOT: {mac['ev_sot']}/{mac['dep_sot']} | Atak: {mac['ev_da']}/{mac['dep_da']}\n"
-        f"--------------------\n"
-        f"Üstad AI: {ai_yorum}\n"
-        f"--------------------\n"
-        f"💡 Tavsiye: SIRADAKİ GOL (S)"
+        f"💡 SIRADAKİ GOL (S)"
     )
     try:
         await bot.send_message(chat_id=CHAT_ID, text=mesaj)
     except Exception as e:
-        logger.error(f"Telegram Mesaj Gönderilemedi: {e}")
+        logger.error(f"Telegram Hatası: {e}")[cite: 2]
 
 async def ana_dongu():
     bot = Bot(token=TELEGRAM_TOKEN)
-    logger.info("Bot Başlatıldı.")
+    
+    # BAĞLANTI TESTİ: Botun yaşadığını anında doğrula[cite: 3]
+    try:
+        await bot.send_message(chat_id=CHAT_ID, text="🚀 V9.5 SİSTEM AKTİF\nBağlantı başarılı, bülten taranıyor...")
+    except Exception as e:
+        logger.error(f"Telegram Başlatma Hatası (Token/ID Kontrol!): {e}")[cite: 2]
+
+    logger.info("Bot Başlatıldı ve Telegram'a Test Mesajı Gönderildi.")[cite: 2]
+    
     while True:
         try:
             maclar = await maclari_cek()
+            logger.info(f"Tarama Tamamlandı: {len(maclar)} maç incelendi.")[cite: 2]
+            
             for mac in maclar:
                 puan, detay, durum = strateji_filtrele(mac)
                 if puan >= MIN_PUAN and mac['id'] not in bildirim_gonderilen:
                     await bildirim_gonder(bot, mac, puan, detay)
                     bildirim_gonderilen[mac['id']] = puan
         except Exception as e: 
-            logger.error(f"Döngü Hatası: {e}")
-        await asyncio.sleep(180)
+            logger.error(f"Döngü Hatası: {e}")[cite: 2]
+        await asyncio.sleep(180) # 3 dakikada bir tarama
 
 if __name__ == "__main__":
     asyncio.run(ana_dongu())
