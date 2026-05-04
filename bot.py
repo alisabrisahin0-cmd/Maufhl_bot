@@ -10,51 +10,59 @@ async def main():
     betsapi_token = os.getenv("BETSAPI_TOKEN")
 
     bot = Bot(token=token)
-    await bot.send_message(chat_id=chat_id, text="🔍 API Veri Yapısı Çözülüyor...")
+    await bot.send_message(chat_id=chat_id, text="🚀 DESTEK EKİBİ ONAYLI TEST BAŞLIYOR...\nEn taze maç bulunup stats=1 ile sorgulanacak.")
 
-    url = f"https://api.betsapi.com/v1/bet365/inplay?token={betsapi_token}"
-    
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url, timeout=15) as resp:
+            # ADIM 1: Güncel listeyi çek
+            list_url = f"https://api.betsapi.com/v3/bet365/inplay_filter?token={betsapi_token}&sport_id=1"
+            async with session.get(list_url, timeout=15) as resp:
                 data = await resp.json()
+                results = data.get('results', [])
                 
-                # API liste mi gönderdi kutu mu? Otomatik ayıklayıcı:
-                results = []
-                if isinstance(data, dict):
-                    results = data.get('results', [])
-                elif isinstance(data, list):
-                    results = data
-                    
-                # BetsAPI bazen veriyi iç içe liste olarak gizler: [ [mac1, mac2] ]
+                # Liste içindeki listeyi düzelt
                 if results and isinstance(results[0], list):
                     results = results[0]
 
                 if not results:
-                    await bot.send_message(chat_id=chat_id, text="⚠️ Bültende canlı maç yok veya veri boş.")
+                    await bot.send_message(chat_id=chat_id, text="⚠️ Şu an canlı bültende hiç maç yok.")
                     return
 
-                # İçinde 'stats' olan ilk maçı bul
-                for match in results:
-                    if isinstance(match, dict) and match.get('stats'):
-                        ev = match.get('home', {}).get('name', 'Ev')
-                        dep = match.get('away', {}).get('name', 'Dep')
-                        stats = match.get('stats')
+                # ADIM 2: En taze ilk maçı al
+                ilk_mac = results[0]
+                # Destek ekibinin dediği gibi ID'yi alıyoruz (FI veya id)
+                taze_id = ilk_mac.get('FI') or ilk_mac.get('id') or ilk_mac.get('ID')
+                ev_isim = ilk_mac.get('home', {}).get('name', 'Ev')
+                dep_isim = ilk_mac.get('away', {}).get('name', 'Dep')
+
+                if not taze_id:
+                    await bot.send_message(chat_id=chat_id, text="❌ Maç bulundu ama ID alınamadı.")
+                    return
+
+                await bot.send_message(chat_id=chat_id, text=f"✅ Taze ID Bulundu: {taze_id}\nMaç: {ev_isim} - {dep_isim}\nŞimdi stats=1 ile detay isteniyor...")
+
+                # ADIM 3: Destek ekibinin onayladığı URL ile istatistikleri çek
+                event_url = f"https://api.betsapi.com/v3/bet365/event?token={betsapi_token}&FI={taze_id}&stats=1"
+                
+                async with session.get(event_url, timeout=15) as event_resp:
+                    event_data = await event_resp.json()
+                    
+                    if event_data.get('success') == 1:
+                        # Veriyi güzelce formatlayıp Telegram'a at
+                        ham_detay = event_data.get('results', [{}])[0]
+                        detay_metni = json.dumps(ham_detay, indent=2)
                         
-                        stats_metni = json.dumps(stats, indent=2)
                         mesaj = (
-                            f"✅ KİLİT AÇILDI!\n"
-                            f"Maç: {ev} - {dep}\n\n"
-                            f"İşte API'nin bize gönderdiği orijinal veri isimleri:\n\n"
-                            f"{stats_metni[:3500]}"
+                            f"🎯 ZAFER!\n"
+                            f"Veriler başarıyla aktı!\n\n"
+                            f"{detay_metni[:3500]}"
                         )
                         await bot.send_message(chat_id=chat_id, text=mesaj)
-                        return
-                        
-                await bot.send_message(chat_id=chat_id, text="Maçlar bulundu ama hiçbirinde 'stats' (istatistik) verisi yok.")
-                
+                    else:
+                        await bot.send_message(chat_id=chat_id, text=f"❌ Event Hatası:\n{event_data}")
+
         except Exception as e:
-            await bot.send_message(chat_id=chat_id, text=f"❌ Veri Okuma Hatası: {e}")
+            await bot.send_message(chat_id=chat_id, text=f"❌ Sistem Hatası: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
