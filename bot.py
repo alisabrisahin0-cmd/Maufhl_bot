@@ -1,6 +1,5 @@
-# MAC ANALIZ BOTU - V9.3 THE DIRECT INPLAY (HATASIZ VE HIZLI)
+# MAC ANALIZ BOTU - V9.4 THE STABLE SIGNAL (KARARLI SİNYAL)
 # Strateji: Altın Pencere & Hücum Epilasyonu (V9.1 Mimari)
-# Özellikler: Tek istekte tüm istatistiklere (SOT, DA, Korner) erişim.
 
 import asyncio
 import aiohttp
@@ -29,42 +28,25 @@ logger = logging.getLogger(__name__)
 bildirim_gonderilen = {}
 
 # ================================================
-# NESİNE BÜLTEN KONTROLÜ
-# ================================================
-def nesine_uygunluk(lig, ev, dep):
-    metin = (str(lig) + " " + str(ev) + " " + str(dep)).lower()
-    riskli_kelimeler = ['u19', 'u20', 'u21', 'u23', 'reserve', 'amateur', 'women', 'youth', 'liga 3', 'liga 4', 'iii liga', 'iv liga', 'regional']
-    if any(kelime in metin for kelime in riskli_kelimeler):
-        return "⚠️ Nesine'de Olmayabilir (Alt Lig/Gençler)"
-    return "✅ Yüksek İhtimalle Nesine'de Var"
-
-# ================================================
-# VERİ MOTORU (TEK İSTEKTE TÜM İSTATİSTİKLER)
+# VERİ MOTORU (DIRECT INPLAY)
 # ================================================
 async def maclari_cek():
     maclar = []
-    # DIRECT INPLAY ENDPOINT: Tek seferde skor, korner, şut ve atakları getirir.
     url = f"https://api.betsapi.com/v1/bet365/inplay?token={BETSAPI_TOKEN}"
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url, timeout=20) as resp:
                 data = await resp.json()
                 results = data.get('results', [])
-                
                 for f in results:
                     try:
-                        # İsim ve Lig Bilgisi
                         ev_isim = f.get('home', {}).get('name', 'Ev')
                         dep_isim = f.get('away', {}).get('name', 'Dep')
                         lig_isim = f.get('league', {}).get('name', 'Lig')
-                        
-                        # Zaman ve Skor
                         dk = int(f.get('timer', {}).get('tm', 0))
                         skor = f.get('ss', '0-0')
                         ev_gol = int(skor.split('-')[0]) if '-' in skor else 0
                         dep_gol = int(skor.split('-')[1]) if '-' in skor else 0
-                        
-                        # İstatistikler (SOT, DA, Korner)
                         stats = f.get('stats', {})
                         ev_korner = int(stats.get('corners', [0, 0])[0])
                         dep_korner = int(stats.get('corners', [0, 0])[1])
@@ -94,33 +76,28 @@ def strateji_filtrele(mac):
     toplam_korner = mac['ev_korner'] + mac['dep_korner']
     toplam_da = mac['ev_da'] + mac['dep_da']
 
-    # 1. HARD BLOCKS (KESİN ENGELLER)
     if toplam_gol >= 5: return 0.0, [], "KAOS_ESIGI"
     if fark >= 3: return 0.0, [], "OLUM_BOLGESI"
     
     puan = 0.0; detay = []
 
-    # 2. ZAMAN AĞIRLIKLI KAPILAR
     if 55 <= dk <= 60:
-        puan += 4.0; detay.append("🌟 ALTIN PENCERE (55-60') +4.0")
+        puan += 4.0; detay.append("ALTIN PENCERE (55-60') +4.0")
     elif 60 < dk <= 75:
-        puan += 2.0; detay.append("⏱️ GEÇİŞ OYUNU EVRESİ (60-75') +2.0")
+        puan += 2.0; detay.append("GECIS OYUNU EVRESI +2.0")
 
-    # 3. SKOR DOYUMU[cite: 1]
     if (ev_gol, dep_gol) in [(2,1), (1,2), (3,1), (1,3)]:
-        puan += 2.0; detay.append(f"🎯 OPTİMUM SKOR ({ev_gol}-{dep_gol}) +2.0")
+        puan += 2.0; detay.append(f"OPTIMUM SKOR ({ev_gol}-{dep_gol}) +2.0")
 
-    # 4. LOJİSTİK SOT CEZA SİSTEMİ (HÜCUM EPİLASYONU)[cite: 1]
     if toplam_sot <= 8:
-        puan += (toplam_sot * 0.25); detay.append(f"🎯 MAKUL ŞUT SEVİYESİ ({toplam_sot})")
+        puan += (toplam_sot * 0.25); detay.append(f"MAKUL SUT SEVIYESI ({toplam_sot})")
     else:
-        puan -= 1.5; detay.append("🛑 HÜCUM EPİLASYONU (SOT > 8) CEZA!")
+        puan -= 1.5; detay.append("HUCUM EPILASYONU (SOT > 8) CEZA!")
 
-    # 5. KORNER VE ATAK KONTROLÜ
     if toplam_korner > 12:
-        puan -= 1.0; detay.append("🚩 ETKİSİZ KORNER BASKISI -1.0")
+        puan -= 1.0; detay.append("ETKISIZ KORNER BASKISI -1.0")
     if toplam_da > 80:
-        puan += 1.0; detay.append("🚀 YÜKSEK TEHLİKELİ ATAK İVMESİ +1.0")
+        puan += 1.0; detay.append("YUKSEK TEHLIKELI ATAK +1.0")
 
     return round(puan, 1), detay, "SUCCESS"
 
@@ -128,33 +105,45 @@ def strateji_filtrele(mac):
 # ORACLE AI VE BİLDİRİM SİSTEMİ
 # ================================================
 async def gemini_oracle(mac):
-    if not GEMINI_KEYS: return "Strateji uygun görünüyor.", True
+    if not GEMINI_KEYS: return "Analiz uygun.", True
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={random.choice(GEMINI_KEYS)}"
-    prompt = f"Analist olarak bu maçı yorumla. Maç: {mac['ev']}-{mac['dep']} ({mac['dakika']}. dk) | SOT: {mac['ev_sot']}+{mac['dep_sot']} | Atak: {mac['ev_da']}+{mac['dep_da']}. Altın pencere ve şut sınırına göre 2 cümlelik yön göster. JSON: {{\"yorum\": \"...\", \"gir\": true}}"
+    prompt = f"Analist olarak bu maci yorumla: {mac['ev']}-{mac['dep']} ({mac['dakika']}. dk) | SOT: {mac['ev_sot']}+{mac['dep_sot']}. JSON: {{\"yorum\": \"...\", \"gir\": true}}"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json"}}, timeout=10) as resp:
                 data = await resp.json(); res = json.loads(data['candidates'][0]['content']['parts'][0]['text'])
                 return res['yorum'], res['gir']
-    except: return "İstatistikler kırılma noktasına işaret ediyor.", True
+    except: return "Istatistikler kirilma noktasinda.", True
 
 async def bildirim_gonder(bot, mac, puan, detay):
     ai_yorum, ai_gir = await gemini_oracle(mac)
     if not ai_gir: return
-    nesine_durum = nesine_uygunluk(mac['lig'], mac['ev'], mac['dep'])
-    tavsiye = "💎 ALTIN FIRSAT: SIRADAKİ GOL" if 55 <= mac['dakika'] <= 60 else "🔥 STRATEJİK SİNYAL"
     
-    mesaj = (f"{tavsiye}\n{mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']} | {mac['dakika']}. DK\n"
-             f"🏆 {mac['lig']}\n📺 BÜLTEN: {nesine_durum}\n"
-             f"────────────────────\n📈 SAF STRATEJİ PUANI: {puan}/12\n🧮 ANALİZ:\n" + "\n".join(detay) + "\n"
-             f"────────────────────\n📊 VERİ: SOT: {mac['ev_sot']}/{mac['dep_sot']} | DA: {mac['ev_da']}/{mac['dep_da']}\n"
-             f"────────────────────\n🕵️‍♂️ ÜSTAD AI (GRİ ALAN): {ai_yorum}\n"
-             f"────────────────────\n💡 TAVSİYE: SIRADAKİ GOL (S)\n📌 DURUM: Kaos eşiği ve ölüm bölgesi kontrolü yapıldı.\n════════════════════")
-    await bot.send_message(chat_id=CHAT_ID, text=mesaj)
+    tavsiye = "ALTIN FIRSAT" if 55 <= mac['dakika'] <= 60 else "STRATEJIK SINYAL"
+    
+    # Karakter hatasını önlemek için güvenli format
+    mesaj = (
+        f"🤖 {tavsiye}\n"
+        f"Maç: {mac['ev']} {mac['ev_gol']}-{mac['dep_gol']} {mac['dep']}\n"
+        f"Dakika: {mac['dakika']} | Lig: {mac['lig']}\n"
+        f"--------------------\n"
+        f"Strateji Puanı: {puan}/12\n"
+        f"Analiz: " + ", ".join(detay) + "\n"
+        f"--------------------\n"
+        f"Veri: SOT: {mac['ev_sot']}/{mac['dep_sot']} | Atak: {mac['ev_da']}/{mac['dep_da']}\n"
+        f"--------------------\n"
+        f"Üstad AI: {ai_yorum}\n"
+        f"--------------------\n"
+        f"💡 Tavsiye: SIRADAKİ GOL (S)"
+    )
+    try:
+        await bot.send_message(chat_id=CHAT_ID, text=mesaj)
+    except Exception as e:
+        logger.error(f"Telegram Mesaj Gönderilemedi: {e}")
 
 async def ana_dongu():
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="🤖 V9.3 DIRECT INPLAY — AKTİF\n✅ FI Hatası Giderildi (Tek İstek Modu)\n✅ Altın Pencere & Hücum Epilasyonu Filtreleri Devrede")
+    logger.info("Bot Başlatıldı.")
     while True:
         try:
             maclar = await maclari_cek()
@@ -163,7 +152,8 @@ async def ana_dongu():
                 if puan >= MIN_PUAN and mac['id'] not in bildirim_gonderilen:
                     await bildirim_gonder(bot, mac, puan, detay)
                     bildirim_gonderilen[mac['id']] = puan
-        except Exception as e: logger.error(f"Hata: {e}")
+        except Exception as e: 
+            logger.error(f"Döngü Hatası: {e}")
         await asyncio.sleep(180)
 
 if __name__ == "__main__":
