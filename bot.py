@@ -1,5 +1,5 @@
-# MAC ANALIZ BOTU - V12.6-KURŞUN GEÇİRMEZ
-# Hata Giderildi: Virgüllü sayı (int) hatası ve veri işleme zırhı eklendi.
+# MAC ANALIZ BOTU - V12.7-MODERN
+# Google'ın en yeni AI kütüphanesine (google-genai) geçiş yapıldı.
 
 import asyncio
 import aiohttp
@@ -7,7 +7,7 @@ from telegram import Bot
 import logging
 import os
 import urllib.parse
-import google.generativeai as genai
+from google import genai
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID = os.getenv("CHAT_ID", "")
@@ -22,12 +22,9 @@ mac_atak_gecmisi = {}
 key_index = 0
 
 def safe_int(val):
-    """Veriyi güvenli bir şekilde tam sayıya çevirir."""
     try:
         if not val: return 0
-        s_val = str(val)
-        if ',' in s_val: s_val = s_val.split(',')[0]
-        if '.' in s_val: s_val = s_val.split('.')[0]
+        s_val = str(val).replace(',', '.').split('.')[0]
         return int(''.join(filter(str.isdigit, s_val)) or 0)
     except: return 0
 
@@ -37,14 +34,17 @@ async def get_ai_commentary(ev, dep, dk, skor, sot, da_ev, da_dep, lig):
         current_key = GEMINI_KEYS[key_index % len(GEMINI_KEYS)]
         key_index += 1
         if not current_key: return "⚠️ AI Key Eksik."
-        genai.configure(api_key=current_key)
-        model = genai.GenerativeModel('gemini-pro')
-        prompt = (f"Sen bir futbol analistisin. Maç: {ev} {skor} {dep} | Dakika: {dk} | Lig: {lig}\n"
-                  f"İstatistikler: Toplam SOT: {sot}, Tehlikeli Atak: {da_ev}-{da_dep}\n"
-                  f"İstatistikleri tekrar etmeden 2 kısa cümlelik taktiksel risk analizi yap.")
-        response = model.generate_content(prompt)
+        
+        client = genai.Client(api_key=current_key)
+        prompt = (f"Futbol Analisti: {ev} {skor} {dep} | Dakika: {dk} | Lig: {lig}\n"
+                  f"İst: SOT: {sot}, DA: {da_ev}-{da_dep}\n"
+                  f"İstatistik tekrarı yapmadan 2 kısa cümlelik taktiksel risk analizi yap.")
+        
+        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         return response.text
-    except: return "AI şu an analiz yapamıyor."
+    except Exception as e:
+        logger.error(f"AI Hatası: {e}")
+        return "AI şu an analiz yapamıyor."
 
 async def analiz_et(mac_detay, m_id):
     ev_adi = ""; dep_adi = ""; dk = 0; skor = "0-0"; ev_sot = 0; dep_sot = 0; ev_da = 0; dep_da = 0; lig = "Lig"
@@ -75,9 +75,7 @@ async def analiz_et(mac_detay, m_id):
     if 20 <= dk <= 85:
         puan += 4.0
         detaylar.append(f"⏱️ Zaman ({dk}'): +4.0")
-    else:
-        logger.info(f"⏭️ {ev_adi} elendi: Dakika ({dk}) kapsam dışı.")
-        return None
+    else: return None
 
     onayli_skorlar = [(1,1), (2,2), (0,1), (2,0), (2,1), (1,2), (0,0)]
     if (ev_gol, dep_gol) in onayli_skorlar:
@@ -107,7 +105,7 @@ async def analiz_et(mac_detay, m_id):
 
 async def ana_dongu():
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="🛡️ V12.6 AKTİF: Sayı formatlama hataları giderildi, tarama devam ediyor.")
+    await bot.send_message(chat_id=CHAT_ID, text="🚀 V12.7 MODERN SİSTEM AKTİF\nGoogle GenAI kütüphanesi güncellendi.")
     async with aiohttp.ClientSession() as session:
         while True:
             try:
