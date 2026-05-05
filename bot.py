@@ -7,9 +7,19 @@ BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
 
 bildirim_gonderilen = {}
 
-# -------------------------
-# VERI DUZELT
-# -------------------------
+# -----------------------------
+# SAFE JSON FETCH
+# -----------------------------
+async def safe_get_json(session, url):
+    try:
+        async with session.get(url, timeout=10) as r:
+            return await r.json()
+    except:
+        return {}
+
+# -----------------------------
+# LIST FLATTEN
+# -----------------------------
 def esnek_liste_duzelt(veri):
     duz = []
     if isinstance(veri, list):
@@ -19,9 +29,25 @@ def esnek_liste_duzelt(veri):
         duz.append(veri)
     return duz
 
-# -------------------------
-# STAT NORMALIZE
-# -------------------------
+# -----------------------------
+# POSSESSION DETECTION
+# -----------------------------
+def detect_possession_pair(values):
+    if len(values) < 2:
+        return False
+
+    vals = list(values)
+    for i in range(len(vals)):
+        for j in range(i + 1, len(vals)):
+            a, b = vals[i], vals[j]
+            if 0 <= a <= 100 and 0 <= b <= 100:
+                if 95 <= (a + b) <= 105:
+                    return True
+    return False
+
+# -----------------------------
+# STAT NORMALIZER (FINAL)
+# -----------------------------
 def stat_normalize(stats_dict):
     norm = {"TA": None, "DA": None, "SOT": None}
     clean = {}
@@ -33,36 +59,38 @@ def stat_normalize(stats_dict):
         except:
             continue
 
-    # keyword yakalama
+    values = list(clean.values())
+
+    # 🚫 possession data -> reject
+    if detect_possession_pair(values):
+        return norm
+
+    # keyword match
     for k, v in clean.items():
-        if "attack" in k and not norm["TA"]:
+        if "attack" in k and norm["TA"] is None:
             norm["TA"] = v
-        elif "danger" in k and not norm["DA"]:
+        elif "danger" in k and norm["DA"] is None:
             norm["DA"] = v
-        elif ("target" in k or "shot_on" in k) and not norm["SOT"]:
+        elif ("target" in k or "shot" in k) and norm["SOT"] is None:
             norm["SOT"] = v
 
-    # fallback (S1 S2 vs)
+    # fallback S1 S2 S3
     s_values = {k: v for k, v in clean.items() if k.startswith("s")}
-    if s_values:
-        sorted_s = sorted(s_values.items(), key=lambda x: x[1], reverse=True)
+    sorted_s = sorted(s_values.items(), key=lambda x: x[1], reverse=True)
 
-        for key, val in sorted_s:
-            if not norm["TA"] and val >= 20:
-                norm["TA"] = val
-                continue
-            if not norm["DA"] and 10 <= val <= 80:
-                norm["DA"] = val
-                continue
-            if not norm["SOT"] and val <= 15:
-                norm["SOT"] = val
-                continue
+    for _, val in sorted_s:
+        if norm["TA"] is None and val >= 20:
+            norm["TA"] = val
+        elif norm["DA"] is None and 10 <= val <= 80:
+            norm["DA"] = val
+        elif norm["SOT"] is None and val <= 15:
+            norm["SOT"] = val
 
     return norm
 
-# -------------------------
-# ANALIZ
-# -------------------------
+# -----------------------------
+# ANALYSIS ENGINE
+# -----------------------------
 async def analiz_et(results):
     stats = esnek_liste_duzelt(results)
 
@@ -74,23 +102,22 @@ async def analiz_et(results):
     teams = []
 
     for item in stats:
-        if item.get('type') == 'EV':
-            names = item.get('NA', '').split(' v ')
+        if item.get("type") == "EV":
+            names = item.get("NA", "").split(" v ")
             ev_adi = names[0] if len(names) > 0 else "Ev"
             dep_adi = names[1] if len(names) > 1 else "Dep"
 
-            # dakika fix
-            tm_raw = str(item.get('TM', '0'))
-            if '+' in tm_raw:
-                dk = int(tm_raw.split('+')[0])
+            tm_raw = str(item.get("TM", "0"))
+            if "+" in tm_raw:
+                dk = int(tm_raw.split("+")[0])
             elif tm_raw.isdigit():
                 dk = int(tm_raw)
             else:
                 dk = 0
 
-            skor = item.get('SS', '0-0')
+            skor = item.get("SS", "0-0")
 
-        elif item.get('type') == 'TE':
+        elif item.get("type") == "TE":
             teams.append(item)
 
     if len(teams) < 2:
@@ -111,24 +138,39 @@ async def analiz_et(results):
     e_sot = ev_stats["SOT"] or 0
     d_sot = dep_stats["SOT"] or 0
 
-    # -------------------------
-    # VALIDATION (KRITIK)
-    # -------------------------
-    if e_sot > 20 or d_sot > 20:
+    # -----------------------------
+    # HARD FILTERS
+    # -----------------------------
+
+    if e_sot > 15 or d_sot > 15:
+        return None
+
+    if (e_sot + d_sot) < 3:
+        return None
+
+    if (e_da + d_da) < 40:
         return None
 
     if e_ta < e_da or d_ta < d_da:
         return None
 
-    if e_ta == 0 and e_da == 0:
+    if e_ta == 0 and d_ta == 0:
         return None
 
     if not (10 <= dk <= 90):
         return None
 
-    # -------------------------
-    # PUANLAMA
-    # -------------------------
+    # SCORE FILTER
+    try:
+        e_score, d_score = map(int, skor.split("-"))
+        if abs(e_score - d_score) >= 2 and dk > 30:
+            return None
+    except:
+        pass
+
+    # -----------------------------
+    # SCORING
+    # -----------------------------
     puan = 4.0
 
     if skor in ["0-0", "1-1", "2-2", "1-0", "0-1", "2-1", "1-2"]:
@@ -140,7 +182,7 @@ async def analiz_et(results):
     if puan < 4.0:
         return None
 
-    n_link = f"https://www.nesine.com/iddaa/arama?text={urllib.parse.quote(ev_adi)}"
+    link = f"https://www.nesine.com/iddaa/arama?text={urllib.parse.quote(ev_adi)}"
 
     return (
         f"💎 SİNYAL (Puan: {puan})\n"
@@ -148,58 +190,54 @@ async def analiz_et(results):
         f"⏱ Dakika: {dk}\n"
         f"--------------------\n"
         f"📊 DA: {e_da}-{d_da} | SOT: {e_sot + d_sot} | TA: {e_ta}-{d_ta}\n"
-        f"🔗 {n_link}"
+        f"🔗 {link}"
     )
 
-# -------------------------
-# ANA DONGU
-# -------------------------
-async def ana_dongu():
+# -----------------------------
+# MAIN LOOP
+# -----------------------------
+async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
 
-    await bot.send_message(
-        chat_id=CHAT_ID,
-        text="🚀 V28 STABLE AKTİF: Veri karışma problemi çözüldü"
-    )
+    await bot.send_message(chat_id=CHAT_ID, text="🚀 V29 STABLE AKTİF")
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                async with session.get(
+                data = await safe_get_json(
+                    session,
                     f"https://api.betsapi.com/v3/bet365/inplay_filter?token={BETSAPI_TOKEN}&sport_id=1"
-                ) as r:
-                    data = await r.json()
-                    res = esnek_liste_duzelt(data.get('results', []))
+                )
 
-                print(f"DEBUG: {len(res)} maç taranıyor...")
+                res = esnek_liste_duzelt(data.get("results", []))
+
+                print(f"DEBUG: {len(res)} maç")
 
                 for m in res:
-                    m_id = str(m.get('id') or m.get('FI', ''))
+                    m_id = str(m.get("id") or m.get("FI", ""))
 
                     if not m_id or m_id in bildirim_gonderilen:
                         continue
 
-                    async with session.get(
+                    event_data = await safe_get_json(
+                        session,
                         f"https://api.betsapi.com/v3/bet365/event?token={BETSAPI_TOKEN}&FI={m_id}&stats=1"
-                    ) as er:
+                    )
 
-                        event_data = await er.json()
-                        msg = await analiz_et(event_data.get('results', []))
+                    msg = await analiz_et(event_data.get("results", []))
 
-                        if msg:
-                            await bot.send_message(
-                                chat_id=CHAT_ID,
-                                text=msg
-                            )
-                            bildirim_gonderilen[m_id] = True
+                    if msg:
+                        await bot.send_message(chat_id=CHAT_ID, text=msg)
+                        bildirim_gonderilen[m_id] = True
+
+                # memory cleanup
+                if len(bildirim_gonderilen) > 500:
+                    bildirim_gonderilen.clear()
 
             except Exception:
                 print(traceback.format_exc())
 
             await asyncio.sleep(60)
 
-# -------------------------
-# BASLAT
-# -------------------------
 if __name__ == "__main__":
-    asyncio.run(ana_dongu())
+    asyncio.run(main())
