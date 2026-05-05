@@ -1,5 +1,5 @@
-# MAC ANALIZ BOTU - V14.0 ÇELİK ZIRH
-# Yenilik: BetsAPI bugları ([ [{}] ] hatası ve FI=None hayalet maçları) engellendi.
+# MAC ANALIZ BOTU - V14.1 ŞEFFAF ZIRH
+# Yenilik: BetsAPI bug kalkanı korundu, Telegram "Tarama Raporu" geri eklendi.
 
 import asyncio
 import aiohttp
@@ -48,7 +48,6 @@ async def get_ai_commentary(ev, dep, dk, skor, sot, da_ev, da_dep, lig):
 async def analiz_et(mac_detay):
     ev_adi = "Ev"; dep_adi = "Dep"; dk = 0; skor = "0-0"; ev_sot = 0; dep_sot = 0; ev_da = 0; dep_da = 0; lig = "Lig"
 
-    # VERİ ZIRHI: Liste veya Dict karmaşasını (Nested List Bug) çözer
     veri_listesi = []
     if isinstance(mac_detay, list):
         for x in mac_detay:
@@ -94,7 +93,8 @@ async def analiz_et(mac_detay):
 
 async def ana_dongu():
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="🚀 V14.0 ÇELİK ZIRH AKTİF: BetsAPI bugları engelleniyor.")
+    await bot.send_message(chat_id=CHAT_ID, text="🚀 V14.1 ŞEFFAF ZIRH AKTİF: Tarama Raporları devrede.")
+    sayac = 0
     async with aiohttp.ClientSession() as session:
         while True:
             try:
@@ -102,18 +102,20 @@ async def ana_dongu():
                     data = await r.json()
                     res = data.get('results', [])
                 
-                # BETSAPI YAZILIM HATASI (BUG) ÇÖZÜMÜ
                 if res and isinstance(res, list) and len(res) > 0 and isinstance(res[0], list):
-                    logger.warning("⚠️ BetsAPI Bug Yakalandı: [ [{}] ] formatı tek listeye indirgeniyor.") 
                     res = res[0]
+
+                # TELEGRAM SİSTEM RAPORU GÖNDERİCİSİ
+                sayac += 1
+                if sayac % 5 == 1:
+                    await bot.send_message(chat_id=CHAT_ID, text=f"📡 SİSTEM RAPORU: BetsAPI'den {len(res)} aktif maç çekildi. Kriterlere uygun olanlar taranıyor...")
 
                 for m in res:
                     if not isinstance(m, dict): continue
                     
-                    # HAYALET MAÇ ÇÖZÜMÜ (FI=None Hatası)
                     m_id = m.get('FI') or m.get('ID')
                     if m_id is None or str(m_id).lower() == "none":
-                        continue # ID yoksa bu maçı doğrudan es geç
+                        continue
                     
                     m_id_str = str(m_id)
                     if m_id_str in bildirim_gonderilen: continue
