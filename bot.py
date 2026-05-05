@@ -1,5 +1,5 @@
-# MAC ANALIZ BOTU - V15.0 FİNAL (NOKTA ATIŞI)
-# Yenilik: BetsAPI'nin küçük harf 'id' güncellemesi koda tanıtıldı. Sistem tam aktif.
+# MAC ANALIZ BOTU - V16.0 ESNEK MİMARİ
+# Yenilik: Dinamik ID bulma, rekürsif liste çözme ve otomatik hata bildirme eklendi.
 
 import asyncio
 import aiohttp
@@ -7,6 +7,7 @@ from telegram import Bot
 import logging
 import os
 import urllib.parse
+import json
 
 try:
     from google import genai
@@ -32,6 +33,33 @@ def safe_int(val):
         return int(''.join(filter(str.isdigit, s_val)) or 0)
     except: return 0
 
+# 1. ESNEK YAPI: Liste içindeki listeleri sınırsız olarak çözer (Recursive Flattening)
+def esnek_liste_duzelt(veri):
+    duz_liste = []
+    if isinstance(veri, list):
+        for eleman in veri:
+            duz_liste.extend(esnek_liste_duzelt(eleman))
+    elif isinstance(veri, dict):
+        duz_liste.append(veri)
+    return duz_liste
+
+# 2. ESNEK YAPI: ID kelimesini barındıran veya önceden bilinen etiketleri otomatik arar
+def esnek_id_bul(mac_dict):
+    if not isinstance(mac_dict, dict): return None
+    
+    # Öncelikli bilinen etiketler
+    olasi_anahtarlar = ['id', 'FI', 'ID', 'match_id', 'event_id']
+    for anahtar in olasi_anahtarlar:
+        if anahtar in mac_dict and mac_dict[anahtar] and str(mac_dict[anahtar]).lower() != "none":
+            return str(mac_dict[anahtar])
+            
+    # Eğer hiçbiri yoksa, isminde 'id' geçen herhangi bir anahtarı dene
+    for k, v in mac_dict.items():
+        if 'id' in str(k).lower() and v and str(v).lower() != "none":
+            return str(v)
+            
+    return None
+
 async def get_ai_commentary(ev, dep, dk, skor, sot, da_ev, da_dep, lig):
     global key_index
     if not HAS_GENAI: return "⚠️ AI Yüklü Değil."
@@ -47,15 +75,8 @@ async def get_ai_commentary(ev, dep, dk, skor, sot, da_ev, da_dep, lig):
 async def analiz_et(mac_detay):
     ev_adi = "Ev"; dep_adi = "Dep"; dk = 0; skor = "0-0"; ev_sot = 0; dep_sot = 0; ev_da = 0; dep_da = 0; lig = "Lig"
 
-    veri_listesi = []
-    if isinstance(mac_detay, list):
-        for x in mac_detay:
-            if isinstance(x, dict): veri_listesi.append(x)
-            elif isinstance(x, list):
-                for y in x:
-                    if isinstance(y, dict): veri_listesi.append(y)
-    elif isinstance(mac_detay, dict):
-        veri_listesi.append(mac_detay)
+    # Esnek düzelticiyi kullanıyoruz
+    veri_listesi = esnek_liste_duzelt(mac_detay)
 
     for item in veri_listesi:
         t = item.get('type')
@@ -67,9 +88,11 @@ async def analiz_et(mac_detay):
             skor = item.get('SS', '0-0')
             lig = item.get('CT', 'Lig')
         elif t == 'TE':
-            if item.get('ID') == '1':
+            # 3. ESNEK YAPI: ID araması yaparken string kontrolünü esnetiyoruz
+            item_id = str(item.get('ID') or item.get('id') or '').strip()
+            if item_id == '1':
                 ev_sot = safe_int(item.get('S1', 0)); ev_da = safe_int(item.get('S4', 0))
-            elif item.get('ID') == '2':
+            elif item_id == '2':
                 dep_sot = safe_int(item.get('S1', 0)); dep_da = safe_int(item.get('S4', 0))
 
     if not (20 <= dk <= 85): return None
@@ -92,8 +115,10 @@ async def analiz_et(mac_detay):
 
 async def ana_dongu():
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="🚀 V15.0 FİNAL AKTİF: ID Hatası çözüldü, sistem filtrelerinize uygun maçları tarıyor.")
+    await bot.send_message(chat_id=CHAT_ID, text="⚙️ V16.0 ESNEK MİMARİ AKTİF: API değişikliklerine karşı otomatik adaptasyon devrede.")
     
+    api_degisti_uyarisi_verildi = False
+
     async with aiohttp.ClientSession() as session:
         while True:
             try:
@@ -101,19 +126,19 @@ async def ana_dongu():
                     data = await r.json()
                     res = data.get('results', [])
                 
-                if res and isinstance(res, list) and len(res) > 0 and isinstance(res[0], list):
-                    res = res[0]
+                res = esnek_liste_duzelt(res)
 
                 for m in res:
-                    if not isinstance(m, dict): continue
+                    m_id_str = esnek_id_bul(m)
                     
-                    # 💡 İŞTE BÜTÜN SORUNU ÇÖZEN O SATIR: Artık küçük harfli 'id' yi de tanıyor!
-                    m_id = m.get('id') or m.get('FI') or m.get('ID') 
-                    
-                    if m_id is None or str(m_id).lower() == "none":
+                    if not m_id_str:
+                        # 4. ESNEK YAPI: Eğer hiçbir şekilde kimlik bulamazsa, API köklü değişmiş demektir.
+                        if not api_degisti_uyarisi_verildi and isinstance(m, dict):
+                            mevcut_anahtarlar = list(m.keys())
+                            await bot.send_message(chat_id=CHAT_ID, text=f"⚠️ UYARI: BetsAPI yapısı tamamen değişmiş olabilir! Bulunan yeni etiketler: {mevcut_anahtarlar}")
+                            api_degisti_uyarisi_verildi = True
                         continue
                     
-                    m_id_str = str(m_id)
                     if m_id_str in bildirim_gonderilen: continue
                     
                     async with session.get(f"https://api.betsapi.com/v3/bet365/event?token={BETSAPI_TOKEN}&FI={m_id_str}&stats=1") as er:
