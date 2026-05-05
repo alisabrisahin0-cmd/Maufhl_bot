@@ -1,6 +1,7 @@
-import asyncio, aiohttp, os, urllib.parse, logging
+import asyncio, aiohttp, os, urllib.parse, logging, json
 from telegram import Bot
 from collections import deque
+from datetime import datetime
 
 # ============================================================================
 # KONFIGÜRASYON
@@ -8,6 +9,11 @@ from collections import deque
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID = os.getenv("CHAT_ID", "")
 BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
+
+# Gemini AI API Keys (3 adet)
+GEMINI_API_KEY_1 = os.getenv("GEMINI_API_KEY_1", "")
+GEMINI_API_KEY_2 = os.getenv("GEMINI_API_KEY_2", "")
+GEMINI_API_KEY_3 = os.getenv("GEMINI_API_KEY_3", "")
 
 bildirim_gonderilen = deque(maxlen=1000)
 
@@ -19,161 +25,214 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# ADAPTİF S-KOD TESPİT SİSTEMİ
+# GEMİNİ AI ENTEGRASYONu (3 API Rotasyonu)
 # ============================================================================
 
-class SKodHaritasi:
+class GeminiAIAnalyzer:
     """
-    S-kodlarını otomatik tespit eden ve değişikliklere uyum sağlayan sistem
+    Gemini AI ile maç analizi ve tahmin sistemi
+    3 API key rotasyonu ile rate limit aşımını önler
     """
     def __init__(self):
-        # Varsayılan eşleştirme (gerçek veriden öğrenildi)
-        self.sot_kod = 'S1'
-        self.ta_kod = 'S3'
-        self.da_kod = 'S4'
-        self.gol_kod = 'SC'
+        self.api_keys = [
+            GEMINI_API_KEY_1,
+            GEMINI_API_KEY_2,
+            GEMINI_API_KEY_3
+        ]
+        self.current_key_index = 0
+        self.api_call_count = 0
         
-        # Öğrenme sayacı
-        self.ogrenme_sayaci = 0
-        self.basarili_eslesme = 0
+        # Aktif API keylerini filtrele
+        self.api_keys = [key for key in self.api_keys if key]
         
-        logger.info("🧠 Adaptif S-Kod sistemi başlatıldı")
+        if not self.api_keys:
+            logger.warning("⚠️ Gemini API key bulunamadı, AI analizi devre dışı")
+        else:
+            logger.info(f"✅ {len(self.api_keys)} Gemini API key yüklendi")
     
-    def s_kodlarini_tespit_et(self, ev_v, dep_v, skor):
-        """
-        Fiziksel kuralları kullanarak S-kodlarını otomatik tespit eder
+    def _get_next_api_key(self):
+        """API keylerini rotasyonla döndürür"""
+        if not self.api_keys:
+            return None
         
-        Kurallar:
-        1. Gol sayısı = SC (skordan biliniyor)
-        2. En büyük değer = TA (Toplam Atak)
-        3. 2. büyük değer = DA (Tehlikeli Atak)
-        4. SOT >= Gol olmalı ve en küçük değerlerden biri
-        5. TA >= DA >= SOT (Fiziksel hiyerarşi)
+        key = self.api_keys[self.current_key_index]
+        self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
+        return key
+    
+    async def analiz_yap(self, mac_verisi, session):
         """
+        Gemini AI'dan maç analizi ve tahmin alır
+        
+        Gri Alan Analizi:
+        - Maç temposu
+        - Takım motivasyonu
+        - Momentum değişimi
+        - Olası sonuç tahmini
+        """
+        if not self.api_keys:
+            return None
+        
         try:
-            # Gol sayısını skordan çıkar
-            try:
-                ev_gol, dep_gol = map(int, skor.split('-'))
-                toplam_gol = ev_gol + dep_gol
-            except:
-                toplam_gol = 0
+            api_key = self._get_next_api_key()
+            self.api_call_count += 1
             
-            # Tüm S-kodlarını topla (boş olmayanlar)
-            s_kodlari = {}
-            for kod in ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8']:
-                ev_val = self._guvenli_int(ev_v.get(kod, 0))
-                dep_val = self._guvenli_int(dep_v.get(kod, 0))
-                toplam = ev_val + dep_val
+            # Gemini AI için prompt hazırla
+            prompt = self._hazirla_prompt(mac_verisi)
+            
+            # Gemini API çağrısı
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
+            
+            payload = {
+                "contents": [{
+                    "parts": [{
+                        "text": prompt
+                    }]
+                }],
+                "generationConfig": {
+                    "temperature": 0.7,
+                    "maxOutputTokens": 500
+                }
+            }
+            
+            async with session.post(
+                url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
                 
-                if toplam > 0:  # Sadece dolu olanları al
-                    s_kodlari[kod] = toplam
-            
-            if len(s_kodlari) < 3:
-                logger.warning("⚠️ Yetersiz S-kodu verisi")
+                if response.status != 200:
+                    logger.error(f"❌ Gemini API hatası: HTTP {response.status}")
+                    return None
+                
+                data = await response.json()
+                
+                # Yanıtı parse et
+                if 'candidates' in data and len(data['candidates']) > 0:
+                    text = data['candidates'][0]['content']['parts'][0]['text']
+                    logger.info(f"🤖 Gemini AI yanıtı alındı ({len(text)} karakter)")
+                    return text
+                
                 return None
-            
-            # Büyükten küçüğe sırala
-            sirali = sorted(s_kodlari.items(), key=lambda x: x[1], reverse=True)
-            
-            # TA = En büyük değer
-            ta_aday = sirali[0]
-            
-            # DA = 2. büyük değer
-            da_aday = sirali[1] if len(sirali) > 1 else None
-            
-            # SOT = Gol sayısından büyük olan en küçük değer
-            sot_aday = None
-            for kod, deger in reversed(sirali):  # Küçükten büyüğe
-                if deger >= toplam_gol:
-                    sot_aday = (kod, deger)
-                    break
-            
-            # Fiziksel hiyerarşi kontrolü
-            if ta_aday and da_aday and sot_aday:
-                ta_val = ta_aday[1]
-                da_val = da_aday[1]
-                sot_val = sot_aday[1]
                 
-                if ta_val >= da_val >= sot_val:
-                    # Başarılı tespit!
-                    yeni_ta = ta_aday[0]
-                    yeni_da = da_aday[0]
-                    yeni_sot = sot_aday[0]
-                    
-                    # Eşleştirme değişti mi?
-                    if (yeni_ta != self.ta_kod or 
-                        yeni_da != self.da_kod or 
-                        yeni_sot != self.sot_kod):
-                        
-                        logger.warning(f"🔄 S-KOD DEĞİŞİKLİĞİ TESPİT EDİLDİ!")
-                        logger.warning(f"Eski: TA={self.ta_kod}, DA={self.da_kod}, SOT={self.sot_kod}")
-                        logger.warning(f"Yeni: TA={yeni_ta}, DA={yeni_da}, SOT={yeni_sot}")
-                        
-                        self.ta_kod = yeni_ta
-                        self.da_kod = yeni_da
-                        self.sot_kod = yeni_sot
-                        
-                        return {
-                            'degisti': True,
-                            'ta_kod': yeni_ta,
-                            'da_kod': yeni_da,
-                            'sot_kod': yeni_sot,
-                            'ta': ta_val,
-                            'da': da_val,
-                            'sot': sot_val
-                        }
-                    
-                    self.basarili_eslesme += 1
-                    return {
-                        'degisti': False,
-                        'ta_kod': self.ta_kod,
-                        'da_kod': self.da_kod,
-                        'sot_kod': self.sot_kod,
-                        'ta': ta_val,
-                        'da': da_val,
-                        'sot': sot_val
-                    }
-            
-            logger.warning("⚠️ Fiziksel hiyerarşi uyumsuz")
+        except asyncio.TimeoutError:
+            logger.error("⏱️ Gemini AI timeout")
             return None
-            
         except Exception as e:
-            logger.error(f"❌ S-kod tespit hatası: {str(e)}")
+            logger.error(f"❌ Gemini AI hatası: {str(e)}")
             return None
     
-    def _guvenli_int(self, deger):
-        """String'i int'e çevirir"""
-        try:
-            if deger == '' or deger is None:
-                return 0
-            return int(deger)
-        except:
-            return 0
-    
-    def veri_cikart(self, ev_v, dep_v):
-        """Mevcut eşleştirmeyi kullanarak veri çıkarır"""
-        ev_sot = self._guvenli_int(ev_v.get(self.sot_kod, 0))
-        ev_ta = self._guvenli_int(ev_v.get(self.ta_kod, 0))
-        ev_da = self._guvenli_int(ev_v.get(self.da_kod, 0))
-        ev_gol = self._guvenli_int(ev_v.get(self.gol_kod, 0))
-        
-        dep_sot = self._guvenli_int(dep_v.get(self.sot_kod, 0))
-        dep_ta = self._guvenli_int(dep_v.get(self.ta_kod, 0))
-        dep_da = self._guvenli_int(dep_v.get(self.da_kod, 0))
-        dep_gol = self._guvenli_int(dep_v.get(self.gol_kod, 0))
-        
-        return {
-            'sot': ev_sot + dep_sot,
-            'ta': ev_ta + dep_ta,
-            'da': ev_da + dep_da,
-            'gol': ev_gol + dep_gol
-        }
+    def _hazirla_prompt(self, mac_verisi):
+        """Gemini AI için detaylı prompt hazırlar"""
+        return f"""
+Futbol maç analizi yap ve tahmin ver.
 
-# Global S-Kod haritası
-s_kod_haritasi = SKodHaritasi()
+MAÇ BİLGİLERİ:
+• Ev Sahibi: {mac_verisi['ev_adi']}
+• Deplasman: {mac_verisi['dep_adi']}
+• Skor: {mac_verisi['skor']}
+• Dakika: {mac_verisi['dakika']}'
+
+İSTATİSTİKLER:
+• Toplam Atak: {mac_verisi['ta']} (Ev: {mac_verisi['ev_ta']}, Dep: {mac_verisi['dep_ta']})
+• Tehlikeli Atak: {mac_verisi['da']} (Ev: {mac_verisi['ev_da']}, Dep: {mac_verisi['dep_da']})
+• İsabetli Şut: {mac_verisi['sot']} (Ev: {mac_verisi['ev_sot']}, Dep: {mac_verisi['dep_sot']})
+• Gol: {mac_verisi['gol']} (Ev: {mac_verisi['ev_gol']}, Dep: {mac_verisi['dep_gol']})
+
+GRİ ALAN ANALİZİ YAP:
+1. Maç Temposu: Hızlı mı, yavaş mı?
+2. Hangi takım baskın?
+3. Momentum: Hangi takımda?
+4. Gol Olasılığı: Sonraki 15 dakikada gol gelir mi?
+5. Tavsiye: Bu maça bahis oynanır mı?
+
+KISA VE NET CEVAP VER (MAX 300 KARAKTER):
+"""
+
+# Global Gemini AI instance
+gemini_ai = GeminiAIAnalyzer()
 
 # ============================================================================
-# YARDIMCI FONKSİYONLAR
+# EKSİKSİZ VERİ KONTROL SİSTEMİ
+# ============================================================================
+
+class VeriKontrolSistemi:
+    """
+    API'den gelen verilerin eksiksiz olduğunu kontrol eder
+    Eksik veri varsa işlemi durdurur
+    """
+    
+    @staticmethod
+    def kontrol_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk):
+        """
+        Tüm kritik verilerin varlığını kontrol eder
+        """
+        hatalar = []
+        
+        # Takım isimleri kontrolü
+        if not ev_adi or ev_adi.strip() == "":
+            hatalar.append("Ev sahibi adı eksik")
+        
+        if not dep_adi or dep_adi.strip() == "":
+            hatalar.append("Deplasman adı eksik")
+        
+        # Skor kontrolü
+        if not skor or '-' not in skor:
+            hatalar.append("Skor formatı hatalı")
+        
+        # Dakika kontrolü
+        if dk <= 0 or dk > 120:
+            hatalar.append(f"Dakika değeri anormal: {dk}")
+        
+        # S-kodları kontrolü
+        gerekli_kodlar = ['S1', 'S3', 'S4', 'SC']
+        
+        for kod in gerekli_kodlar:
+            if kod not in ev_v or ev_v[kod] == '' or ev_v[kod] is None:
+                hatalar.append(f"Ev sahibi {kod} eksik")
+            
+            if kod not in dep_v or dep_v[kod] == '' or dep_v[kod] is None:
+                hatalar.append(f"Deplasman {kod} eksik")
+        
+        # Hata varsa logla ve False döndür
+        if hatalar:
+            logger.warning(f"⚠️ Veri eksiklikleri tespit edildi:")
+            for hata in hatalar:
+                logger.warning(f"  • {hata}")
+            return False, hatalar
+        
+        logger.info("✅ Tüm veriler eksiksiz")
+        return True, []
+
+veri_kontrol = VeriKontrolSistemi()
+
+# ============================================================================
+# S-KOD EŞLEŞTİRME (Sabit - Güvenilir)
+# ============================================================================
+
+def guvenli_int(deger, varsayilan=0):
+    """String'i int'e çevirir"""
+    try:
+        if deger == '' or deger is None:
+            return varsayilan
+        return int(deger)
+    except:
+        return varsayilan
+
+def veri_cikart(ev_v, dep_v):
+    """S-kodlarından veri çıkarır (Sabit eşleştirme)"""
+    return {
+        'ev_sot': guvenli_int(ev_v.get('S1', 0)),
+        'ev_ta': guvenli_int(ev_v.get('S3', 0)),
+        'ev_da': guvenli_int(ev_v.get('S4', 0)),
+        'ev_gol': guvenli_int(ev_v.get('SC', 0)),
+        'dep_sot': guvenli_int(dep_v.get('S1', 0)),
+        'dep_ta': guvenli_int(dep_v.get('S3', 0)),
+        'dep_da': guvenli_int(dep_v.get('S4', 0)),
+        'dep_gol': guvenli_int(dep_v.get('SC', 0))
+    }
+
+# ============================================================================
+# ANA ANALİZ MOTORU
 # ============================================================================
 
 def esnek_liste_duzelt(veri):
@@ -185,67 +244,55 @@ def esnek_liste_duzelt(veri):
         duz.append(veri)
     return duz
 
-# ============================================================================
-# ANA ANALİZ MOTORU
-# ============================================================================
-
-async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot):
-    """Maç verilerini analiz eder ve sinyal oluşturur"""
+async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session):
+    """
+    Eksiksiz veri kontrolü + Gemini AI analizi + Sinyal oluşturma
+    """
     try:
         logger.info(f"🔍 Analiz: {ev_adi} vs {dep_adi} - {dk}'")
         
         # ----------------------------------------------------------------
-        # ADAPTİF S-KOD TESPİTİ
+        # 1. EKSİKSİZ VERİ KONTROLÜ
         # ----------------------------------------------------------------
-        tespit = s_kod_haritasi.s_kodlarini_tespit_et(ev_v, dep_v, skor)
+        veri_tamam, hatalar = veri_kontrol.kontrol_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk)
         
-        if tespit and tespit['degisti']:
-            # S-kod değişikliği tespit edildi, Telegram'a bildir
-            await bot.send_message(
-                chat_id=CHAT_ID,
-                text=(
-                    f"🔄 **S-KOD DEĞİŞİKLİĞİ TESPİT EDİLDİ!**\n\n"
-                    f"Yeni Eşleştirme:\n"
-                    f"• TA = {tespit['ta_kod']}\n"
-                    f"• DA = {tespit['da_kod']}\n"
-                    f"• SOT = {tespit['sot_kod']}\n\n"
-                    f"Sistem otomatik olarak yeni eşleştirmeye geçti."
-                )
-            )
-        
-        # Veriyi çıkar
-        veri = s_kod_haritasi.veri_cikart(ev_v, dep_v)
-        sot = veri['sot']
-        ta = veri['ta']
-        da = veri['da']
-        toplam_gol = veri['gol']
-        
-        logger.info(f"📊 TA:{ta}, DA:{da}, SOT:{sot}, Gol:{toplam_gol}")
+        if not veri_tamam:
+            logger.error(f"❌ Veri eksik, işlem iptal edildi")
+            return None
         
         # ----------------------------------------------------------------
-        # FİZİKSEL KONTROLLER
+        # 2. VERİ ÇIKARMA
+        # ----------------------------------------------------------------
+        v = veri_cikart(ev_v, dep_v)
+        
+        sot = v['ev_sot'] + v['dep_sot']
+        ta = v['ev_ta'] + v['dep_ta']
+        da = v['ev_da'] + v['dep_da']
+        gol = v['ev_gol'] + v['dep_gol']
+        
+        logger.info(f"📊 TA:{ta}, DA:{da}, SOT:{sot}, Gol:{gol}")
+        
+        # ----------------------------------------------------------------
+        # 3. FİZİKSEL KONTROLLER
         # ----------------------------------------------------------------
         if ta == 0 and da == 0 and sot == 0:
             logger.warning("❌ Tüm istatistikler sıfır")
             return None
         
         if ta < da or da < sot or ta < sot:
-            logger.warning(f"❌ Fiziksel hiyerarşi ihlali")
+            logger.warning(f"❌ Fiziksel hiyerarşi ihlali: TA:{ta}, DA:{da}, SOT:{sot}")
             return None
         
-        if sot < toplam_gol:
-            logger.warning(f"❌ SOT < Gol: {sot} < {toplam_gol}")
+        if sot < gol:
+            logger.warning(f"❌ SOT < Gol: {sot} < {gol}")
             return None
         
         if dk > 0 and sot > (dk * 0.7):
-            logger.warning(f"❌ SOT limiti aşıldı")
+            logger.warning(f"❌ SOT limiti aşıldı: {sot} > {dk * 0.7}")
             return None
         
-        if ta > 0 and (da / ta) > 0.80:
-            logger.warning(f"⚠️ DA/TA oranı yüksek: {da}/{ta}")
-        
         # ----------------------------------------------------------------
-        # PUANLAMA
+        # 4. PUANLAMA
         # ----------------------------------------------------------------
         puan = 4.0
         
@@ -263,25 +310,55 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot):
         logger.info(f"💯 Toplam puan: {round(puan, 1)}")
         
         # ----------------------------------------------------------------
-        # SİNYAL OLUŞTURMA
+        # 5. SİNYAL OLUŞTURMA (Puan >= 7.0)
         # ----------------------------------------------------------------
         if puan >= 7.0:
+            # Gemini AI analizi al
+            mac_verisi = {
+                'ev_adi': ev_adi,
+                'dep_adi': dep_adi,
+                'skor': skor,
+                'dakika': dk,
+                'ta': ta,
+                'da': da,
+                'sot': sot,
+                'gol': gol,
+                'ev_ta': v['ev_ta'],
+                'dep_ta': v['dep_ta'],
+                'ev_da': v['ev_da'],
+                'dep_da': v['dep_da'],
+                'ev_sot': v['ev_sot'],
+                'dep_sot': v['dep_sot'],
+                'ev_gol': v['ev_gol'],
+                'dep_gol': v['dep_gol']
+            }
+            
+            logger.info("🤖 Gemini AI analizi isteniyor...")
+            ai_analiz = await gemini_ai.analiz_yap(mac_verisi, session)
+            
             link = f"https://www.nesine.com/iddaa/arama?text={urllib.parse.quote(ev_adi)}"
+            
             mesaj = (
                 f"💎 **SİNYAL (Puan: {round(puan,1)})**\n"
                 f"⚽ {ev_adi} {skor} {dep_adi}\n"
-                f"⏱ Dakika: {dk}\n"
+                f"⏱ Dakika: {dk}'\n"
                 f"{'='*30}\n"
                 f"📊 **İstatistikler:**\n"
-                f"• Toplam Atak: {ta}\n"
-                f"• Tehlikeli Atak: {da}\n"
-                f"• İsabetli Şut: {sot}\n"
-                f"• Gol: {toplam_gol}\n"
-                f"{'='*30}\n"
-                f"🧠 S-Kod: TA={s_kod_haritasi.ta_kod}, DA={s_kod_haritasi.da_kod}, SOT={s_kod_haritasi.sot_kod}\n"
-                f"🔗 [Nesine'de Aç]({link})"
+                f"• Toplam Atak: {ta} (Ev:{v['ev_ta']}, Dep:{v['dep_ta']})\n"
+                f"• Tehlikeli Atak: {da} (Ev:{v['ev_da']}, Dep:{v['dep_da']})\n"
+                f"• İsabetli Şut: {sot} (Ev:{v['ev_sot']}, Dep:{v['dep_sot']})\n"
+                f"• Gol: {gol} (Ev:{v['ev_gol']}, Dep:{v['dep_gol']})\n"
             )
-            logger.info(f"✅ SİNYAL OLUŞTURULDU!")
+            
+            if ai_analiz:
+                mesaj += f"{'='*30}\n"
+                mesaj += f"🤖 **Gemini AI Analizi:**\n"
+                mesaj += f"{ai_analiz}\n"
+            
+            mesaj += f"{'='*30}\n"
+            mesaj += f"🔗 [Nesine'de Aç]({link})"
+            
+            logger.info(f"✅ SİNYAL OLUŞTURULDU (AI: {'✅' if ai_analiz else '❌'})")
             return mesaj
         else:
             logger.info(f"📉 Puan yetersiz: {round(puan, 1)} < 7.0")
@@ -326,7 +403,7 @@ async def mac_isle(bot, mac_id, session):
                     ev_adi = parts[0].strip()
                     dep_adi = parts[1].strip()
                 
-                dk = int(str(item.get('TM', 0)) or 0)
+                dk = guvenli_int(item.get('TM', 0))
                 skor = item.get('SS', '0-0')
                 
             elif item_type == 'TE':
@@ -336,13 +413,10 @@ async def mac_isle(bot, mac_id, session):
                 else:
                     dep_v = item
         
-        if not ev_adi or not dep_adi or not ev_v or not dep_v:
-            return None
-        
         if not (15 <= dk <= 85):
             return None
         
-        return await mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot)
+        return await mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session)
         
     except Exception as e:
         logger.error(f"❌ Maç işleme hatası ({mac_id}): {str(e)}")
@@ -361,14 +435,15 @@ async def ana_dongu():
         await bot.send_message(
             chat_id=CHAT_ID,
             text=(
-                "🛡️ **V38.0 ADAPTİF S-KOD SİSTEMİ**\n\n"
-                "🧠 **Yeni Özellik: Otomatik S-Kod Tespiti**\n"
-                "• API S-kodlarını değiştirirse sistem otomatik tespit eder\n"
-                "• Fiziksel kuralları kullanarak doğru eşleştirme yapar\n"
-                "• Değişiklik olduğunda sizi bilgilendirir\n\n"
+                "🛡️ **V39.0 GEMİNİ AI ENTEGRE**\n\n"
+                "🤖 **Yeni Özellikler:**\n"
+                "• Gemini AI ile gri alan analizi\n"
+                "• 3 API key rotasyonu (rate limit koruması)\n"
+                "• Eksiksiz veri kontrolü\n"
+                "• Maç tahmini ve momentum analizi\n\n"
                 "✅ Tüm güvenlik kontrolleri aktif\n"
                 "✅ Railway stable\n"
-                "✅ Bellek optimizasyonu yapıldı"
+                f"✅ Gemini AI: {len(gemini_ai.api_keys)} key yüklü"
             )
         )
         logger.info("✅ Başlangıç mesajı gönderildi")
@@ -422,7 +497,7 @@ async def ana_dongu():
                         logger.info(f"✅ Bildirim gönderildi: {mac_id}")
                 
                 logger.info(f"✅ Döngü #{dongu_sayaci} tamamlandı")
-                logger.info(f"📊 Başarılı eşleşme sayısı: {s_kod_haritasi.basarili_eslesme}")
+                logger.info(f"🤖 Gemini AI çağrı sayısı: {gemini_ai.api_call_count}")
                 
             except Exception as e:
                 logger.error(f"❌ Ana döngü hatası: {str(e)}")
@@ -433,10 +508,11 @@ async def ana_dongu():
             await asyncio.sleep(60)
 
 if __name__ == "__main__":
-    logger.info("🚀 V38.0 Adaptif Bot Başlatılıyor...")
+    logger.info("🚀 V39.0 Gemini AI Bot Başlatılıyor...")
     logger.info(f"📍 Telegram Token: {'✅' if TELEGRAM_TOKEN else '❌'}")
     logger.info(f"📍 Chat ID: {'✅' if CHAT_ID else '❌'}")
     logger.info(f"📍 BetsAPI Token: {'✅' if BETSAPI_TOKEN else '❌'}")
+    logger.info(f"📍 Gemini API Keys: {len([k for k in [GEMINI_API_KEY_1, GEMINI_API_KEY_2, GEMINI_API_KEY_3] if k])}/3")
     
     try:
         asyncio.run(ana_dongu())
