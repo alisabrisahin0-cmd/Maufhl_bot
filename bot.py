@@ -1,5 +1,5 @@
-# MAC ANALIZ BOTU - V22.0 ŞEFFAF TAKİP
-# Özellik: Her 5 dakikada bir 'Hayattayım' raporu atar ve elenen maçların nedenini söyler.
+# MAC ANALIZ BOTU - V23.0 ANALİTİK MOTOR
+# Yenilik: İstatistiksel puanlama, 60 sn tarama ve detaylı AI hata raporu.
 
 import asyncio
 import aiohttp
@@ -18,7 +18,6 @@ CHAT_ID = os.getenv("CHAT_ID", "")
 BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
 GEMINI_KEYS = [os.getenv("GEMINI_KEY_1", ""), os.getenv("GEMINI_KEY_2", ""), os.getenv("GEMINI_KEY_3", "")]
 
-# Varsayılan harita (Denetim başarısız olursa diye)
 CURRENT_MAP = {"TOTAL_ATTACK": "S3", "DANGEROUS_ATTACK": "S4", "SOT": "S1", "CORNER": "S2", "POSSESSION": "S7"}
 bildirim_gonderilen = {}
 key_index = 0
@@ -32,15 +31,18 @@ def esnek_liste_duzelt(veri):
 
 async def get_ai_commentary(ev, dep, dk, skor, sot, da_ev, da_dep, lig):
     global key_index
-    if not HAS_GENAI: return "⚠️ AI Yüklü Değil."
+    if not HAS_GENAI: return "⚠️ Google-GenAI kütüphanesi yüklü değil (requirements.txt kontrol)."
     try:
         current_key = GEMINI_KEYS[key_index % len(GEMINI_KEYS)]
+        if not current_key: return "⚠️ Railway Variables: GEMINI_KEY_1 boş!"
         key_index += 1
         client = genai.Client(api_key=current_key)
-        prompt = f"Maç: {ev} {skor} {dep} | Dk: {dk}. Taktiksel çok kısa yorum yap."
+        prompt = (f"Maç: {ev} {skor} {dep} | Dk: {dk}. DA: {da_ev}-{da_dep}. SOT: {sot}. "
+                  f"Bu istatistiklere göre maçın gidişatını 1 cümleyle yorumla.")
         response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         return response.text
-    except: return "Analiz yapılamadı."
+    except Exception as e: 
+        return f"⚠️ AI Bağlantı Hatası: {str(e)[:100]}"
 
 async def mantiksal_dogrulama(session):
     global CURRENT_MAP
@@ -56,10 +58,10 @@ async def mantiksal_dogrulama(session):
             for item in stats:
                 if item.get('type') == 'TE' and str(item.get('ID')) == '1':
                     raw_v = {k: int(str(v) or 0) for k, v in item.items() if k.startswith('S') and str(v).isdigit()}
-                    sorted_keys = sorted(raw_v, key=raw_v.get, reverse=True)
-                    if len(sorted_keys) >= 2:
-                        CURRENT_MAP["TOTAL_ATTACK"] = sorted_keys[0]
-                        CURRENT_MAP["DANGEROUS_ATTACK"] = sorted_keys[1]
+                    sk = sorted(raw_v, key=raw_v.get, reverse=True)
+                    if len(sk) >= 2:
+                        CURRENT_MAP["TOTAL_ATTACK"] = sk[0]
+                        CURRENT_MAP["DANGEROUS_ATTACK"] = sk[1]
                         return True
         return False
     except: return False
@@ -67,84 +69,70 @@ async def mantiksal_dogrulama(session):
 async def analiz_ve_puanla(mac_detay):
     stats = esnek_liste_duzelt(mac_detay)
     ev_adi = "Ev"; dep_adi = "Dep"; dk = 0; skor = "0-0"; lig = "Lig"
-    ev_sot = 0; dep_sot = 0; ev_da = 0; dep_da = 0
+    ev_sot = 0; dep_sot = 0; ev_da = 0; dep_da = 0; ev_ta = 0; dep_ta = 0
 
     for item in stats:
         if item.get('type') == 'EV':
             names = item.get('NA', '').split(' v ')
-            ev_adi = names[0] if len(names) > 0 else "Ev"
-            dep_adi = names[1] if len(names) > 1 else "Dep"
+            ev_adi = names[0]; dep_adi = names[1]
             dk = int(str(item.get('TM', 0)) or 0)
-            skor = item.get('SS', '0-0')
-            lig = item.get('CT', 'Lig')
+            skor = item.get('SS', '0-0'); lig = item.get('CT', 'Lig')
         elif item.get('type') == 'TE':
             v_sot = int(str(item.get(CURRENT_MAP["SOT"], 0)) or 0)
             v_da = int(str(item.get(CURRENT_MAP["DANGEROUS_ATTACK"], 0)) or 0)
-            if str(item.get('ID')) == '1': ev_sot = v_sot; ev_da = v_da
-            else: dep_sot = v_sot; dep_da = v_da
+            v_ta = int(str(item.get(CURRENT_MAP["TOTAL_ATTACK"], 0)) or 0)
+            if str(item.get('ID')) == '1': ev_sot = v_sot; ev_da = v_da; ev_ta = v_ta
+            else: dep_sot = v_sot; dep_da = v_da; dep_ta = v_ta
 
-    # Filtre Kontrolü (Log için)
-    if not (15 <= dk <= 88): return "DK_DISI"
+    if not (20 <= dk <= 85): return None
     
     ev_gol = int(skor.split('-')[0]) if '-' in skor else 0
     dep_gol = int(skor.split('-')[1]) if '-' in skor else 0
-    if abs(ev_gol - dep_gol) >= 3: return "GOL_FARKI"
+    if abs(ev_gol - dep_gol) >= 3: return None
 
-    # Puanlama
+    # 🚀 GELİŞMİŞ PUANLAMA
     puan = 4.0
-    # Onaylı skorlar bonusu (+3)
+    # Skor Bonusu
     if (ev_gol, dep_gol) in [(0,0), (1,1), (2,2), (1,0), (0,1), (2,1), (1,2)]:
         puan += 3.0
+    
+    # İstatistik Bonusu (Dinamiğe uygun)
+    toplam_da = ev_da + dep_da
+    toplam_sot = ev_sot + dep_sot
+    
+    puan += (toplam_da // 10) * 0.5  # Her 10 DA = +0.5 Puan
+    puan += (toplam_sot // 2) * 0.5  # Her 2 SOT = +0.5 Puan
 
     if puan >= 4.0:
-        ai = await get_ai_commentary(ev_adi, dep_adi, dk, skor, ev_sot+dep_sot, ev_da, dep_da, lig)
+        ai = await get_ai_commentary(ev_adi, dep_adi, dk, skor, toplam_sot, ev_da, dep_da, lig)
         link = f"https://www.nesine.com/iddaa/arama?text={urllib.parse.quote(ev_adi)}"
         return (f"💎 **SİNYAL (Puan: {puan})**\n⚽ {ev_adi} {skor} {dep_adi}\n⏱ Dakika: {dk}\n"
-                f"--------------------\n🤖 AI: {ai}\n📊 DA: {ev_da}-{dep_da} | SOT: {ev_sot+dep_sot}\n🔗 [Nesine]({link})")
-    return "PUAN_YETERSIZ"
+                f"--------------------\n🤖 AI: {ai}\n"
+                f"📊 DA: {ev_da}-{dep_da} | SOT: {toplam_sot} | TA: {ev_ta}-{dep_ta}\n"
+                f"🔗 [Nesine]({link})")
+    return None
 
 async def ana_dongu():
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="🛰 **V22.0 ŞEFFAF MOD:** Tarama başlıyor. Her 5 dk'da bir durum raporu verilecek.")
-    
     async with aiohttp.ClientSession() as session:
-        # Denetim yapılamasa bile varsayılanla başla (Kilitlenmeyi önlemek için)
         await mantiksal_dogrulama(session)
-        
-        sayac = 0
+        await bot.send_message(chat_id=CHAT_ID, text="🚀 **V23.0 AKTİF:** Puanlama motoru ve AI hata raporlama devrede.")
         while True:
             try:
-                sayac += 1
                 async with session.get(f"https://api.betsapi.com/v3/bet365/inplay_filter?token={BETSAPI_TOKEN}&sport_id=1") as r:
-                    data = await r.json()
-                    res = esnek_liste_duzelt(data.get('results', []))
+                    res = esnek_liste_duzelt((await r.json()).get('results', []))
                 
-                toplam = len(res)
-                elenen_dk = 0; elenen_gol = 0; gonderilen = 0
-
                 for m in res:
-                    m_id = m.get('id') or m.get('FI')
-                    if not m_id or str(m_id) in bildirim_gonderilen: continue
+                    m_id = str(m.get('id') or m.get('FI', ''))
+                    if not m_id or m_id in bildirim_gonderilen: continue
                     
                     async with session.get(f"https://api.betsapi.com/v3/bet365/event?token={BETSAPI_TOKEN}&FI={m_id}&stats=1") as er:
-                        e_data = await er.json()
-                        sonuc = await analiz_ve_puanla(e_data.get('results', []))
-                        
-                        if isinstance(sonuc, str) and "SİNYAL" in sonuc:
-                            await bot.send_message(chat_id=CHAT_ID, text=sonuc, parse_mode="Markdown")
-                            bildirim_gonderilen[str(m_id)] = True
-                            gonderilen += 1
-                        elif sonuc == "DK_DISI": elenen_dk += 1
-                        elif sonuc == "GOL_FARKI": elenen_gol += 1
-
-                # Her 5 döngüde bir (yaklaşık 5-10 dk) durum raporu at
-                if sayac % 5 == 0:
-                    await bot.send_message(chat_id=CHAT_ID, text=f"📊 **DURUM RAPORU:**\n- Taranan Maç: {toplam}\n- Dakika Dışı: {elenen_dk}\n- Gol Farkı Fazla: {elenen_gol}\n- Yeni Sinyal: {gonderilen}\n✅ Sistem Sorunsuz Çalışıyor.")
-
-            except Exception as e:
-                await bot.send_message(chat_id=CHAT_ID, text=f"⚠️ Hata: {str(e)[:100]}")
-            
-            await asyncio.sleep(120)
+                        msg = await analiz_ve_puanla((await er.json()).get('results', []))
+                        if msg:
+                            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+                            bildirim_gonderilen[m_id] = True
+            except: pass
+            await asyncio.sleep(60) # 60 saniye tarama
 
 if __name__ == "__main__":
     asyncio.run(ana_dongu())
