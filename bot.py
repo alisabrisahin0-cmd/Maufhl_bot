@@ -1,30 +1,18 @@
-# MAC ANALIZ BOTU - V14.1 ŞEFFAF ZIRH
-# Yenilik: BetsAPI bug kalkanı korundu, Telegram "Tarama Raporu" geri eklendi.
+# MAC ANALIZ BOTU - V14.2 VERİ RÖNTGENİ
+# Yenilik: Tüm filtreler kaldırıldı. Gelen ham veri test amaçlı Telegram'a basılacak.
 
 import asyncio
 import aiohttp
 from telegram import Bot
 import logging
 import os
-import urllib.parse
-import json
-
-try:
-    from google import genai
-    HAS_GENAI = True
-except ImportError:
-    HAS_GENAI = False
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID = os.getenv("CHAT_ID", "")
 BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
-GEMINI_KEYS = [os.getenv("GEMINI_KEY_1", ""), os.getenv("GEMINI_KEY_2", ""), os.getenv("GEMINI_KEY_3", "")]
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-bildirim_gonderilen = {}
-key_index = 0
 
 def safe_int(val):
     try:
@@ -33,20 +21,8 @@ def safe_int(val):
         return int(''.join(filter(str.isdigit, s_val)) or 0)
     except: return 0
 
-async def get_ai_commentary(ev, dep, dk, skor, sot, da_ev, da_dep, lig):
-    global key_index
-    if not HAS_GENAI: return "⚠️ AI Yüklü Değil."
-    try:
-        current_key = GEMINI_KEYS[key_index % len(GEMINI_KEYS)]
-        key_index += 1
-        client = genai.Client(api_key=current_key)
-        prompt = f"Analiz: {ev} {skor} {dep} | Dk: {dk}. Taktiksel yorum yap."
-        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-        return response.text
-    except: return "AI analiz edemedi."
-
-async def analiz_et(mac_detay):
-    ev_adi = "Ev"; dep_adi = "Dep"; dk = 0; skor = "0-0"; ev_sot = 0; dep_sot = 0; ev_da = 0; dep_da = 0; lig = "Lig"
+async def ham_veriyi_cikar(mac_detay):
+    ev_adi = "Ev"; dep_adi = "Dep"; dk = 0; skor = "0-0"; ev_sot = 0; dep_sot = 0; ev_da = 0; dep_da = 0
 
     veri_listesi = []
     if isinstance(mac_detay, list):
@@ -66,35 +42,24 @@ async def analiz_et(mac_detay):
             dep_adi = names[1] if len(names) > 1 else "Dep"
             dk = safe_int(item.get('TM', 0))
             skor = item.get('SS', '0-0')
-            lig = item.get('CT', 'Lig')
         elif t == 'TE':
             if item.get('ID') == '1':
                 ev_sot = safe_int(item.get('S1', 0)); ev_da = safe_int(item.get('S4', 0))
             elif item.get('ID') == '2':
                 dep_sot = safe_int(item.get('S1', 0)); dep_da = safe_int(item.get('S4', 0))
 
-    if not (20 <= dk <= 85): return None
-
-    ev_gol = safe_int(skor.split('-')[0]) if '-' in skor else 0
-    dep_gol = safe_int(skor.split('-')[1]) if '-' in skor else 0
-    
-    puan = 4.0 
-    onayli_skorlar = [(1,1), (2,2), (0,1), (2,0), (2,1), (1,2), (0,0)]
-    if (ev_gol, dep_gol) in onayli_skorlar: puan += 3.0
-    if abs(ev_gol - dep_gol) >= 3: return None
-
-    if puan >= 4.0:
-        ai_yorum = await get_ai_commentary(ev_adi, dep_adi, dk, skor, ev_sot+dep_sot, ev_da, dep_da, lig)
-        nesine_link = f"https://www.nesine.com/iddaa/arama?text={urllib.parse.quote(ev_adi)}"
-        return (f"💎 SİNYAL (Puan: {puan})\n⚽ {ev_adi} {skor} {dep_adi}\n⏱ Dakika: {dk}\n"
-                f"--------------------\n🤖 AI: {ai_yorum}\n\n📊 DA: {ev_da}-{dep_da} | SOT: {ev_sot+dep_sot}\n"
-                f"🔗 [Nesine'de Ara]({nesine_link})")
-    return None
+    # HİÇBİR FİLTRE YOK. Ne geldiyse onu döndürüyor.
+    return (f"🔍 TEST VERİSİ (Filtresiz)\n"
+            f"⚽ {ev_adi} {skor} {dep_adi}\n"
+            f"⏱ Okunan Dakika: {dk}\n"
+            f"📊 Tehlikeli Atak: {ev_da} - {dep_da}\n"
+            f"🎯 İsabetli Şut: {ev_sot} - {dep_sot}\n"
+            f"--------------------")
 
 async def ana_dongu():
     bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=CHAT_ID, text="🚀 V14.1 ŞEFFAF ZIRH AKTİF: Tarama Raporları devrede.")
-    sayac = 0
+    await bot.send_message(chat_id=CHAT_ID, text="🔬 V14.2 RÖNTGEN MODU AKTİF: Tüm filtreler kapatıldı. Sadece veri test ediliyor.")
+    
     async with aiohttp.ClientSession() as session:
         while True:
             try:
@@ -105,31 +70,33 @@ async def ana_dongu():
                 if res and isinstance(res, list) and len(res) > 0 and isinstance(res[0], list):
                     res = res[0]
 
-                # TELEGRAM SİSTEM RAPORU GÖNDERİCİSİ
-                sayac += 1
-                if sayac % 5 == 1:
-                    await bot.send_message(chat_id=CHAT_ID, text=f"📡 SİSTEM RAPORU: BetsAPI'den {len(res)} aktif maç çekildi. Kriterlere uygun olanlar taranıyor...")
+                test_mesajlari = 0 # Sadece ilk 3 maçı test etmesi için sayaç
 
                 for m in res:
                     if not isinstance(m, dict): continue
-                    
                     m_id = m.get('FI') or m.get('ID')
-                    if m_id is None or str(m_id).lower() == "none":
-                        continue
+                    if m_id is None or str(m_id).lower() == "none": continue
                     
                     m_id_str = str(m_id)
-                    if m_id_str in bildirim_gonderilen: continue
                     
                     async with session.get(f"https://api.betsapi.com/v3/bet365/event?token={BETSAPI_TOKEN}&FI={m_id_str}&stats=1") as er:
                         e_data = await er.json()
                         if e_data.get('success') == 1 and e_data.get('results'):
-                            msg = await analiz_et(e_data['results'])
+                            msg = await ham_veriyi_cikar(e_data['results'])
                             if msg:
-                                await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-                                bildirim_gonderilen[m_id_str] = True
+                                await bot.send_message(chat_id=CHAT_ID, text=msg)
+                                test_mesajlari += 1
+                                
+                    if test_mesajlari >= 3: 
+                        break # İlk 3 veriyi Telegram'a atıp döngüden çıkar
+                
+                # Sistemi spam yapmamak için 5 dakika duraklatır
+                await bot.send_message(chat_id=CHAT_ID, text="🛑 Test tamamlandı. 5 dakika sonra tekrar 3 rastgele maç verisi çekilecek.")
+                await asyncio.sleep(300)
+                
             except Exception as e: 
                 logger.error(f"Döngü Hatası: {e}")
-            await asyncio.sleep(120)
+                await asyncio.sleep(120)
 
 if __name__ == "__main__":
     asyncio.run(ana_dongu())
