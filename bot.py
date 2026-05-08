@@ -751,7 +751,7 @@ async def mac_isle(bot, mac_id, session):
     """Tek bir maçı işler"""
     try:
         async with session.get(
-            f"https://api.betsapi.com/v3/bet365/event?token={BETSAPI_TOKEN}&FI={mac_id}&stats=1",
+            f"https://api.b365api.com/v1/bet365/event?token={BETSAPI_TOKEN}&FI={mac_id}&stats=1",
             timeout=aiohttp.ClientTimeout(total=30)
         ) as response:
             
@@ -848,7 +848,7 @@ async def ana_dongu():
             
             try:
                 async with session.get(
-                    f"https://api.betsapi.com/v3/bet365/inplay_filter?token={BETSAPI_TOKEN}&sport_id=1",
+                    f"https://api.b365api.com/v1/bet365/inplay?token={BETSAPI_TOKEN}",
                     timeout=aiohttp.ClientTimeout(total=30)
                 ) as response:
                     
