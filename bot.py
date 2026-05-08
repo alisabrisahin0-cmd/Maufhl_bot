@@ -852,7 +852,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
         logger.info(f"   ✓ Sahte baskı kontrolü: {sahte_baski_ok}")
         if not sahte_baski_ok:
             logger.warning(f"   ❌ ELENDİ: Sahte baskı tespit edildi: {sahte_baski_durum}")
-            return None
+            return None  # SİNYAL GÖNDERİLMEMELİ!
         
         # 6. ⭐ YENİ: Korner Tuzağı Kontrolü (S2 verisi varsa)
         if ev_korner > 0 or dep_korner > 0:
@@ -955,10 +955,10 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
             return None
         
         # ----------------------------------------------------------------
-        # SİNYAL OLUŞTURMA (Puan >= 4.0) ⭐ GEÇİCİ TEST EŞIĞI (NORMAL: 9.0)
+        # SİNYAL OLUŞTURMA (Puan >= 9.0)
         # ----------------------------------------------------------------
-        logger.info(f"🐛 DEBUG - Puan Kontrolü: {round(puan, 1)} >= 4.0 (test eşiği)")
-        if puan >= 4.0:  # ⚠️ GEÇİCİ: Test için 9.0'dan 4.0'a düşürüldü
+        logger.info(f"🐛 DEBUG - Puan Kontrolü: {round(puan, 1)} >= 9.0")
+        if puan >= 9.0:  # Puan eşiği 9.0'a geri alındı
             # Gemini AI analizi
             mac_verisi = {
                 'ev_adi': ev_adi,
@@ -988,37 +988,19 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
                 logger.info("📊 Asian Handicap çekiliyor...")
                 asian_handicap = await asian_handicap_cek(event_id, session)
             
-            # Tavsiye oluştur - Sadece "SIRADAKİ GOL" (hangi takım atacak diye tahmin yapma)
-            xg_fark = abs(ev_xg - dep_xg)
-            
-            # Ana tavsiye: Filtreleme sonucuna göre sadece "GOL OLACAK"
+            # Tavsiye oluştur - Basit ve anlaşılır
             if skor_durum == "OPTIMUM" and 55 <= dk <= 60:
                 tavsiye = "⭐ ALTIN FIRSAT: SIRADAKİ GOL"
-            elif xg_fark > 0.8:
-                tavsiye = "🎯 SIRADAKİ GOL (Yüksek Momentum)"
-            elif xg_fark > 0.4:
-                tavsiye = "📊 SIRADAKİ GOL (Orta Momentum)"
             else:
-                tavsiye = "⚖️ SIRADAKİ GOL (Dengeli Oyun)"
+                tavsiye = "🎯 SIRADAKİ GOL"
             
-            # xG bilgisi ekle (hangi takım daha baskın - sadece bilgi amaçlı)
+            # xG analizi ekle
             if ev_xg > dep_xg + 0.5:
-                tavsiye += f"\n💡 xG Analizi: Ev sahibi daha baskın ({ev_xg:.2f} vs {dep_xg:.2f})"
+                tavsiye += f"\n💡 Ev sahibi daha baskın (xG: {ev_xg:.1f} vs {dep_xg:.1f})"
             elif dep_xg > ev_xg + 0.5:
-                tavsiye += f"\n💡 xG Analizi: Deplasman daha baskın ({dep_xg:.2f} vs {ev_xg:.2f})"
+                tavsiye += f"\n💡 Deplasman daha baskın (xG: {dep_xg:.1f} vs {ev_xg:.1f})"
             else:
-                tavsiye += f"\n💡 xG Analizi: Dengeli oyun ({ev_xg:.2f} vs {dep_xg:.2f})"
-            
-            # Asian Handicap bilgisi (varsa - piyasa görüşü, bilgi amaçlı)
-            if asian_handicap:
-                try:
-                    ah_value = float(asian_handicap.get('ev_handicap', 0))
-                    if ah_value < -0.5:
-                        tavsiye += f"\n📊 Handikap: Ev sahibi favori ({asian_handicap.get('ev_handicap')})"
-                    elif ah_value > 0.5:
-                        tavsiye += f"\n📊 Handikap: Deplasman favori (+{asian_handicap.get('ev_handicap')})"
-                except:
-                    pass
+                tavsiye += f"\n💡 Dengeli oyun (xG: {ev_xg:.1f} vs {ev_xg:.1f})"
             
             # Toplam xG hesapla
             xg = ev_xg + dep_xg
@@ -1048,6 +1030,11 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
                 f"✅ Doğrulama: VU:{dogrulama.VU} VA:{dogrulama.VA} USA:{dogrulama.USA} MA:{dogrulama.MA}\n"
             )
             
+            # Gemini AI analizi ekle
+            if ai_analiz:
+                mesaj += f"{'='*30}\n"
+                mesaj += f"🤖 **Gemini AI:**\n{ai_analiz}\n"
+            
             # Asian Handicap bilgisi ekle
             if asian_handicap:
                 mesaj += f"{'='*30}\n"
@@ -1055,17 +1042,13 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
                 mesaj += f"• Ev: {asian_handicap['ev_handicap']} (Oran: {asian_handicap['ev_oran']})\n"
                 mesaj += f"• Dep: {asian_handicap['dep_handicap']} (Oran: {asian_handicap['dep_oran']})\n"
             
-            if ai_analiz:
-                mesaj += f"{'='*30}\n"
-                mesaj += f"🤖 **Gemini AI:**\n{ai_analiz}\n"
-            
             mesaj += f"{'='*30}\n"
             mesaj += f"ℹ️ Bu maç Nesine'de oynanıyor"
             
             logger.info(f"✅ SİNYAL OLUŞTURULDU (AI: {'✅' if ai_analiz else '❌'})")
             return mesaj
         else:
-            logger.warning(f"   ❌ ELENDİ: Puan yetersiz: {round(puan, 1)} < 4.0 (test eşiği)")
+            logger.warning(f"   ❌ ELENDİ: Puan yetersiz: {round(puan, 1)} < 9.0")
             logger.info(f"      Puan detayı: Baz=4.0, Zaman={zaman_bonusu}, Skor={'3.0' if skor_durum=='OPTIMUM' else '0'}, SOT={sot_puan}, DA={da_bonus}")
             return None
             
