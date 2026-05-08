@@ -808,24 +808,32 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
         logger.info(f"📊 TA:{ta}, DA:{da}, SOT:{sot}, Gol:{toplam_gol}")
         
         # ----------------------------------------------------------------
+        # 🐛 DEBUG: Filtre Kontrolü
+        # ----------------------------------------------------------------
+        logger.info(f"🐛 DEBUG - Filtre Kontrolü Başlıyor")
+        
+        # ----------------------------------------------------------------
         # ⭐⭐⭐ KRİTİK FİLTRELER
         # ----------------------------------------------------------------
         
         # 1. Skor durumu kontrolü (Kaos/Rölanti)
         skor_ok, skor_durum = skor_durumu_kontrol(ev_gol, dep_gol)
+        logger.info(f"   ✓ Skor kontrolü: {skor_ok} ({skor_durum})")
         if not skor_ok:
+            logger.warning(f"   ❌ ELENDİ: Skor durumu uygun değil ({skor_durum})")
             return None
         
         # 2. Dakika aralığı kontrolü (15-85)
+        logger.info(f"   ✓ Dakika kontrolü: {dk} (15-85 arası olmalı)")
         if not (15 <= dk <= 85):
-            logger.debug(f"⏱️ Dakika aralık dışı: {dk}")
+            logger.warning(f"   ❌ ELENDİ: Dakika aralık dışı: {dk}")
             return None
         
         # 3. ⭐ YENİ: Oyun Durumu Normalizasyonu
         ev_da_norm, ev_sot_norm, dep_da_norm, dep_sot_norm = oyun_durumu_normalizasyonu(
             ev_gol, dep_gol, v['ev_da'], v['dep_da'], v['ev_sot'], v['dep_sot'], dk
         )
-        logger.info(f"🔄 Normalizasyon: Ev DA:{v['ev_da']}→{ev_da_norm}, Dep DA:{v['dep_da']}→{dep_da_norm}")
+        logger.info(f"   ✓ Normalizasyon: Ev DA:{v['ev_da']}→{ev_da_norm}, Dep DA:{v['dep_da']}→{dep_da_norm}")
         
         # Normalize edilmiş değerleri kullan
         da_norm = ev_da_norm + dep_da_norm
@@ -837,43 +845,55 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
         
         ev_xg = xg_hesapla(v['ev_sot'], v['ev_da'], v['ev_ta'], ev_korner)
         dep_xg = xg_hesapla(v['dep_sot'], v['dep_da'], v['dep_ta'], dep_korner)
-        logger.info(f"🎯 xG: Ev={ev_xg}, Dep={dep_xg}")
+        logger.info(f"   ✓ xG: Ev={ev_xg}, Dep={dep_xg}")
         
         # 5. ⭐ YENİ: Sahte Baskı Eliminasyonu
         sahte_baski_ok, sahte_baski_durum = sahte_baski_eliminasyonu(ev_xg, dep_xg, ev_gol, dep_gol)
+        logger.info(f"   ✓ Sahte baskı kontrolü: {sahte_baski_ok}")
         if not sahte_baski_ok:
-            logger.warning(f"❌ Sahte baskı tespit edildi: {sahte_baski_durum}")
+            logger.warning(f"   ❌ ELENDİ: Sahte baskı tespit edildi: {sahte_baski_durum}")
             return None
         
         # 6. ⭐ YENİ: Korner Tuzağı Kontrolü (S2 verisi varsa)
         if ev_korner > 0 or dep_korner > 0:
-            if not korner_tuzagi_kontrolu(ev_korner, dep_korner, v['ev_sot'], v['dep_sot']):
-                logger.warning(f"❌ Korner tuzağı tespit edildi")
+            korner_ok = korner_tuzagi_kontrolu(ev_korner, dep_korner, v['ev_sot'], v['dep_sot'])
+            logger.info(f"   ✓ Korner tuzağı kontrolü: {korner_ok}")
+            if not korner_ok:
+                logger.warning(f"   ❌ ELENDİ: Korner tuzağı tespit edildi")
                 return None
         
         # 7. Fiziksel hiyerarşi kontrolü
-        if ta < da or da < sot or ta < sot:
-            logger.warning(f"❌ Fiziksel hiyerarşi ihlali: TA:{ta}, DA:{da}, SOT:{sot}")
+        hiyerarsi_ok = ta >= da and da >= sot and ta >= sot
+        logger.info(f"   ✓ Fiziksel hiyerarşi: {hiyerarsi_ok} (TA:{ta} >= DA:{da} >= SOT:{sot})")
+        if not hiyerarsi_ok:
+            logger.warning(f"   ❌ ELENDİ: Fiziksel hiyerarşi ihlali")
             return None
         
         # 8. Gol vs SOT kontrolü
-        if sot < toplam_gol:
-            logger.warning(f"❌ SOT < Gol: {sot} < {toplam_gol}")
+        gol_sot_ok = sot >= toplam_gol
+        logger.info(f"   ✓ Gol/SOT kontrolü: {gol_sot_ok} (SOT:{sot} >= Gol:{toplam_gol})")
+        if not gol_sot_ok:
+            logger.warning(f"   ❌ ELENDİ: SOT < Gol")
             return None
         
         # 9. Dakika başı şut limiti
-        if dk > 0 and sot > (dk * 0.7):
-            logger.warning(f"❌ SOT limiti aşıldı: {sot} > {dk * 0.7}")
+        sot_limit = dk * 0.7 if dk > 0 else 999
+        sot_limit_ok = sot <= sot_limit
+        logger.info(f"   ✓ SOT limit kontrolü: {sot_limit_ok} (SOT:{sot} <= {sot_limit:.1f})")
+        if not sot_limit_ok:
+            logger.warning(f"   ❌ ELENDİ: SOT limiti aşıldı")
             return None
         
         # 10. ⭐ YENİ: Master Algoritma (Ekstrem Koşul Kontrolü)
         ma_aktif = False
         if toplam_gol >= 4 and dk >= 75:
-            logger.warning(f"⚠️ Master Algoritma: Toplam gol {toplam_gol} >= 4 ve dakika {dk} >= 75")
+            logger.warning(f"   ⚠️ Master Algoritma: Toplam gol {toplam_gol} >= 4 ve dakika {dk} >= 75")
             ma_aktif = True
         if abs(ev_gol - dep_gol) >= 3 and dk >= 70:
-            logger.warning(f"⚠️ Master Algoritma: Gol farkı {abs(ev_gol - dep_gol)} >= 3 ve dakika {dk} >= 70")
+            logger.warning(f"   ⚠️ Master Algoritma: Gol farkı {abs(ev_gol - dep_gol)} >= 3 ve dakika {dk} >= 70")
             ma_aktif = True
+        
+        logger.info(f"🎉 TÜM FİLTRELERDEN GEÇTİ!")
         
         # ----------------------------------------------------------------
         # ⭐⭐⭐ PUANLAMA SİSTEMİ (Literatür Bazlı + Normalizasyon)
@@ -927,14 +947,18 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
             logger.warning(f"⚠️ Master Algoritma aktif")
         
         # Çok katmanlı doğrulama kontrolü
-        if not dogrulama.sinyal_uret():
-            logger.warning(f"❌ Çok katmanlı doğrulama başarısız")
+        dogrulama_ok = dogrulama.sinyal_uret()
+        logger.info(f"   ✓ Çok katmanlı doğrulama: {dogrulama_ok}")
+        if not dogrulama_ok:
+            logger.warning(f"   ❌ ELENDİ: Çok katmanlı doğrulama başarısız")
+            logger.info(f"      VU:{dogrulama.VU}, VA:{dogrulama.VA}, USA:{dogrulama.USA}, MA:{dogrulama.MA}")
             return None
         
         # ----------------------------------------------------------------
-        # SİNYAL OLUŞTURMA (Puan >= 9.0) ⭐ YENİ EŞIK
+        # SİNYAL OLUŞTURMA (Puan >= 4.0) ⭐ GEÇİCİ TEST EŞIĞI (NORMAL: 9.0)
         # ----------------------------------------------------------------
-        if puan >= 9.0:
+        logger.info(f"🐛 DEBUG - Puan Kontrolü: {round(puan, 1)} >= 4.0 (test eşiği)")
+        if puan >= 4.0:  # ⚠️ GEÇİCİ: Test için 9.0'dan 4.0'a düşürüldü
             # Gemini AI analizi
             mac_verisi = {
                 'ev_adi': ev_adi,
@@ -1041,7 +1065,8 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
             logger.info(f"✅ SİNYAL OLUŞTURULDU (AI: {'✅' if ai_analiz else '❌'})")
             return mesaj
         else:
-            logger.info(f"📉 Puan yetersiz: {round(puan, 1)} < 9.0")
+            logger.warning(f"   ❌ ELENDİ: Puan yetersiz: {round(puan, 1)} < 4.0 (test eşiği)")
+            logger.info(f"      Puan detayı: Baz=4.0, Zaman={zaman_bonusu}, Skor={'3.0' if skor_durum=='OPTIMUM' else '0'}, SOT={sot_puan}, DA={da_bonus}")
             return None
             
     except Exception as e:
@@ -1133,26 +1158,84 @@ async def mac_isle(bot, mac_data, session):
             stats_data = mac_data.get('stats', {})
             veri_kaynagi = "inplay"
         
-        if not stats_data or not isinstance(stats_data, dict):
-            logger.debug(f"⚠️ İstatistik verisi yok (event_id: {mac_id})")
-            logger.debug(f"   Mevcut keys: {list(mac_data.keys())}")
+        # ============================================================================
+        # 🐛 DEBUG: Stats Data Kontrolü
+        # ============================================================================
+        logger.info(f"🐛 DEBUG - Stats Data Kontrolü (event_id: {mac_id})")
+        logger.info(f"   📊 Stats data tipi: {type(stats_data)}")
+        logger.info(f"   📊 Stats data boş mu: {not stats_data}")
+        
+        if stats_data and isinstance(stats_data, dict):
+            logger.info(f"   📊 Stats keys: {list(stats_data.keys())}")
+            logger.info(f"   📊 Stats içeriği (ilk 200 karakter): {str(stats_data)[:200]}")
+            
+            # Yeni format kontrolü
+            if 'corners' in stats_data:
+                logger.info(f"   ✅ YENİ FORMAT tespit edildi (array)")
+                logger.info(f"      corners: {stats_data.get('corners')}")
+                logger.info(f"      on_target: {stats_data.get('on_target')}")
+                logger.info(f"      attacks: {stats_data.get('attacks')}")
+            elif '1' in stats_data:
+                logger.info(f"   ✅ ESKİ FORMAT tespit edildi (dict)")
+                logger.info(f"      stats['1'] keys: {list(stats_data.get('1', {}).keys())}")
+                logger.info(f"      stats['2'] keys: {list(stats_data.get('2', {}).keys())}")
+            else:
+                logger.warning(f"   ❌ BİLİNMEYEN FORMAT!")
+        else:
+            logger.warning(f"   ❌ Stats data yok veya dict değil!")
+            logger.info(f"   📊 mac_data keys: {list(mac_data.keys())}")
             return None
         
-        ev_v = stats_data.get('1', {})  # Ev sahibi stats
-        dep_v = stats_data.get('2', {})  # Deplasman stats
+        # ============================================================================
+        # 🆕 YENİ FORMAT PARSE DENEMESİ
+        # ============================================================================
+        ev_v = None
+        dep_v = None
+        
+        # Önce yeni formatı dene
+        if 'corners' in stats_data and isinstance(stats_data.get('corners'), list):
+            logger.info(f"   🔄 Yeni format parse ediliyor...")
+            koruma = VeriKorumaKatmani()
+            parse_result = koruma.yeni_format_parse(stats_data)
+            
+            if parse_result:
+                ev_v, dep_v = parse_result
+                logger.info(f"   ✅ Yeni format başarıyla parse edildi!")
+                logger.info(f"      Ev stats: {ev_v}")
+                logger.info(f"      Dep stats: {dep_v}")
+            else:
+                logger.warning(f"   ❌ Yeni format parse başarısız!")
+        
+        # Eski format fallback
+        if not ev_v or not dep_v:
+            logger.info(f"   🔄 Eski format deneniyor...")
+            ev_v = stats_data.get('1', {})  # Ev sahibi stats
+            dep_v = stats_data.get('2', {})  # Deplasman stats
+            
+            if ev_v and dep_v:
+                logger.info(f"   ✅ Eski format başarılı!")
+                logger.info(f"      Ev stats keys: {list(ev_v.keys())}")
+                logger.info(f"      Dep stats keys: {list(dep_v.keys())}")
         
         if not ev_v or not dep_v:
-            logger.debug(f"⚠️ Takım istatistikleri eksik (event_id: {mac_id})")
+            logger.warning(f"❌ Takım istatistikleri parse edilemedi (event_id: {mac_id})")
             return None
         
-        # S-kodlarını kontrol et (en az birkaç istatistik olmalı)
+        # ============================================================================
+        # 🐛 DEBUG: S-kod Kontrolü
+        # ============================================================================
         ev_stats_count = sum(1 for k in ev_v.keys() if k.startswith('S'))
         dep_stats_count = sum(1 for k in dep_v.keys() if k.startswith('S'))
         
+        logger.info(f"🐛 DEBUG - S-kod Kontrolü")
+        logger.info(f"   📊 Ev S-kod sayısı: {ev_stats_count}")
+        logger.info(f"   📊 Dep S-kod sayısı: {dep_stats_count}")
+        
         if ev_stats_count == 0 or dep_stats_count == 0:
-            logger.debug(f"⚠️ S-kod istatistikleri bulunamadı (event_id: {mac_id})")
-            logger.debug(f"   Ev stats keys: {list(ev_v.keys())}")
-            logger.debug(f"   Dep stats keys: {list(dep_v.keys())}")
+            logger.warning(f"❌ S-kod istatistikleri bulunamadı (event_id: {mac_id})")
+            logger.info(f"   Ev stats keys: {list(ev_v.keys())}")
+            logger.info(f"   Dep stats keys: {list(dep_v.keys())}")
+            logger.info(f"   ⚠️ SORUN: Stats formatı S-kod içermiyor, parse gerekebilir!")
             return None
         
         logger.info(f"✅ Maç verisi parse edildi: {ev_adi} vs {dep_adi} ({dk}', {skor})")
