@@ -1,4 +1,4 @@
-import asyncio, aiohttp, os, urllib.parse, logging, re, time
+import asyncio, aiohttp, os, urllib.parse, logging, re
 from telegram import Bot
 from collections import deque
 
@@ -22,84 +22,6 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 logger = logging.getLogger(__name__)
-
-# ============================================================================
-# ZAMAN KONTROLÜ (Gece 12'den sonra bot kapansın)
-# ============================================================================
-
-def gece_kontrol():
-    """
-    Türkiye saati (UTC+3) ile gece 00:00 - 06:00 arası bot çalışmasın
-    """
-    # UTC saatini al ve Türkiye saatine çevir (UTC+3)
-    utc_saat = time.gmtime()
-    turkiye_saat = (utc_saat.tm_hour + 3) % 24
-    
-    if 0 <= turkiye_saat < 6:
-        logger.warning(f"🌙 Gece modu: Saat {turkiye_saat:02d}:00 - Bot uyuyor")
-        return True
-    
-    return False
-
-# ============================================================================
-# NESİNE LİG KONTROLÜ
-# ============================================================================
-
-def nesine_lig_kontrolu(ev_adi, dep_adi):
-    """
-    🎯 LİTERATÜR: Regex tabanlı güçlendirilmiş filtre
-    Maçın Nesine'de oynanıp oynanmadığını kontrol eder
-    E-spor, Reserves, U19/U20 gibi maçları eler
-    """
-    mac_metni = f"{ev_adi} {dep_adi}".lower()
-    
-    # 1. U19, U20, U21, U23 regex ile tespit (GÜÇLÜ)
-    if re.search(r'\bu\d{2}\b', mac_metni):
-        logger.info(f"🚫 Nesine'de yok: U-yaş kategorisi tespit edildi")
-        return False
-    
-    # 2. Reserves regex ile tespit
-    if re.search(r'\breserve[s]?\b', mac_metni):
-        logger.info(f"🚫 Nesine'de yok: Reserves tespit edildi")
-        return False
-    
-    # 3. E-spor regex ile tespit
-    if re.search(r'\be[-\s]?sport[s]?\b', mac_metni):
-        logger.info(f"🚫 Nesine'de yok: E-spor tespit edildi")
-        return False
-    
-    # 4. Women/Kadınlar
-    if re.search(r'\b(w|women|kadın|kadin)\b', mac_metni):
-        logger.info(f"🚫 Nesine'de yok: Kadınlar ligi tespit edildi")
-        return False
-    
-    # 5. Youth/Junior/Academy
-    if re.search(r'\b(youth|junior|academy)\b', mac_metni):
-        logger.info(f"🚫 Nesine'de yok: Genç takım tespit edildi")
-        return False
-    
-    # 6. Virtual/Simulation
-    if re.search(r'\b(virtual|simulation|sim)\b', mac_metni):
-        logger.info(f"🚫 Nesine'de yok: Virtual maç tespit edildi")
-        return False
-    
-    # 7. E-spor takım isimleri (parantez içinde)
-    esport_takimlar = [
-        'kodak', 'kray', 'og', 'hotshot', 'andrew',
-        'professor', 'carlos', 'ken', 'jetli',
-        'volvo', 'grellz', 'glory', 'grimace',
-        'frantsuz', 'nekishka', 'eden', 'boom',
-        'force', 'emperor', 'yerema', 'catalyst',
-        'pimchik', 'koss', 'fantazer'
-    ]
-    
-    for takim in esport_takimlar:
-        if f'({takim})' in mac_metni:
-            logger.info(f"🚫 Nesine'de yok: E-spor takımı '({takim})' tespit edildi")
-            return False
-    
-    logger.info(f"✅ Nesine'de oynanıyor")
-    return True
 
 # ============================================================================
 # ⭐⭐⭐ KRİTİK: ALTIN PENCERE VE SKOR DURUMU FİLTRELERİ
@@ -143,7 +65,9 @@ def sot_epilasyon_kontrol(sot):
         return -1.0
 
 def detayli_tavsiye_olustur(v, ev_gol, dep_gol, dk, skor_durum, zaman_durumu):
-    """Detaylı gri alan analizi ve tahmin oluşturur"""
+    """
+    Detaylı gri alan analizi ve tahmin oluşturur
+    """
     toplam_gol = ev_gol + dep_gol
     
     # Momentum analizi
@@ -154,59 +78,61 @@ def detayli_tavsiye_olustur(v, ev_gol, dep_gol, dk, skor_durum, zaman_durumu):
     # Baskınlık oranı
     if ev_momentum + dep_momentum > 0:
         ev_baskinlik = ev_momentum / (ev_momentum + dep_momentum)
-Date/time: 2026-05-05T21:21:59.963Z
-Extension version: 3.53.0
-Provider: anthropic
-Model: claude-sonnet-4-6
-
-Provider ended the request: API request failed    else:
+    else:
         ev_baskinlik = 0.5
     
-    # Tempo analizi
+    # Tempo analizi (dakika başı atak)
     if dk > 0:
         tempo = (v['ev_ta'] + v['dep_ta']) / dk
     else:
         tempo = 0
     
+    # ================================================================
     # TAHMİN OLUŞTURMA
-    tahminler = []
+    # ================================================================
+    tahmin_listesi = []
     
     # 1. Hangi takım gol atacak?
     if ev_baskinlik > 0.65:
-        tahminler.append("🏠 **Ev sahibi gol atacak**")
+        tahmin_listesi.append("🏠 **Ev sahibi gol atacak**")
     elif ev_baskinlik < 0.35:
-        tahminler.append("✈️ **Deplasman gol atacak**")
+        tahmin_listesi.append("✈️ **Deplasman gol atacak**")
     else:
-        tahminler.append("⚽ **Gol olacak**")
+        tahmin_listesi.append("⚽ **Her iki takım da gol atabilir**")
     
     # 2. Alt/Üst tahminleri
     if toplam_gol == 0:
         if tempo > 2.5 and toplam_momentum > 50:
-            tahminler.append("📈 **Üst 0.5 Gol** (Yüksek tempo)")
-        tahminler.append("📊 **Üst 1.5 Gol** oynanabilir")
+            tahmin_listesi.append("📈 **Üst 0.5 Gol** (Yüksek tempo)")
+        tahmin_listesi.append("📊 **Üst 1.5 Gol** oynanabilir")
     elif toplam_gol == 1:
         if tempo > 2.0 and toplam_momentum > 40:
-            tahminler.append("📈 **Üst 2.5 Gol** oynanabilir")
+            tahmin_listesi.append("📈 **Üst 2.5 Gol** oynanabilir")
         else:
-            tahminler.append("📊 **Alt 3.5 Gol** güvenli")
+            tahmin_listesi.append("📊 **Alt 3.5 Gol** güvenli")
     elif toplam_gol == 2:
         if tempo > 2.5:
-            tahminler.append("📈 **Üst 3.5 Gol** oynanabilir")
+            tahmin_listesi.append("📈 **Üst 3.5 Gol** oynanabilir")
         else:
-            tahminler.append("📊 **Alt 4.5 Gol** güvenli")
+            tahmin_listesi.append("📊 **Alt 4.5 Gol** güvenli")
     elif toplam_gol == 3:
-        tahminler.append("📈 **Üst 4.5 Gol** riskli ama oynanabilir")
+        tahmin_listesi.append("📈 **Üst 4.5 Gol** riskli ama oynanabilir")
     elif toplam_gol == 4:
-        tahminler.append("⚠️ **Kaos bölgesine yakın, dikkatli olun**")
+        tahmin_listesi.append("⚠️ **Kaos bölgesine yakın, dikkatli olun**")
     
-    # 3. Özel durumlar
+    # 3. Korner tahmini
+    # 4. Kart tahmini (veri yoksa atla)
+    
+    # 5. Özel durumlar
     if zaman_durumu == "ALTIN_PENCERE":
-        tahminler.insert(0, "⭐ **ALTIN PENCERE: Gol olasılığı çok yüksek!**")
+        tahmin_listesi.insert(0, "⭐ **ALTIN PENCERE: Gol olasılığı çok yüksek!**")
     
     if skor_durum == "OPTIMUM":
-        tahminler.insert(0, "🎯 **Optimum skor durumu: Gol beklentisi yüksek**")
+        tahmin_listesi.insert(0, "🎯 **Optimum skor durumu: Gol beklentisi yüksek**")
     
+    # ================================================================
     # GRİ ALAN ANALİZİ
+    # ================================================================
     gri_alan = []
     
     # Tempo
@@ -241,10 +167,10 @@ Provider ended the request: API request failed    else:
         else:
             gri_alan.append(f"🎯 **Şut Verimliliği:** Düşük (%{int(sut_verimlilik*100)})")
     
-    return tahminler, gri_alan
+    return tahmin_listesi, gri_alan
 
 # ============================================================================
-# GEMİNİ AI
+# GEMİNİ AI ENTEGRASYONu
 # ============================================================================
 
 class GeminiAIAnalyzer:
@@ -281,15 +207,16 @@ MAÇ: {mac_verisi['ev_adi']} {mac_verisi['skor']} {mac_verisi['dep_adi']} ({mac_
 • TA: {mac_verisi['ta']} (Ev:{mac_verisi['ev_ta']}, Dep:{mac_verisi['dep_ta']})
 • DA: {mac_verisi['da']} (Ev:{mac_verisi['ev_da']}, Dep:{mac_verisi['dep_da']})
 • SOT: {mac_verisi['sot']} (Ev:{mac_verisi['ev_sot']}, Dep:{mac_verisi['dep_sot']})
+• Gol: {mac_verisi['gol']} (Ev:{mac_verisi['ev_gol']}, Dep:{mac_verisi['dep_gol']})
 
 DETAYLI ANALİZ:
-1. Fiziksel durum (yorgunluk?)
-2. Taktik (açık/kapalı?)
-3. Hangi takım golü hak ediyor?
-4. Sonraki 15 dakika?
-5. Özel durum?
+1. Takımların fiziksel durumu (yorgunluk var mı?)
+2. Taktiksel yaklaşım (açık/kapalı oyun?)
+3. Hangi takımın golü daha çok hak ettiği
+4. Sonraki 15 dakikada ne olabilir?
+5. Dikkat edilmesi gereken özel bir durum var mı?
 
-KISA CEVAP (MAX 300 KARAKTER):"""
+KISA VE NET CEVAP (MAX 300 KARAKTER):"""
             
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
             
@@ -343,7 +270,7 @@ def guvenli_int(deger, varsayilan=0):
         return varsayilan
 
 def veri_cikart(ev_v, dep_v):
-    """S-kodlarından veri çıkarır"""
+    """S-kodlarından veri çıkarır (Sabit eşleştirme: S1=SOT, S3=TA, S4=DA, SC=Gol)"""
     return {
         'ev_sot': guvenli_int(ev_v.get('S1', 0)),
         'ev_ta': guvenli_int(ev_v.get('S3', 0)),
@@ -356,16 +283,13 @@ def veri_cikart(ev_v, dep_v):
     }
 
 # ============================================================================
-# ANA ANALİZ MOTORU
+# ⭐⭐⭐ ANA ANALİZ MOTORU (Literatür Bazlı)
 # ============================================================================
 
 async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session):
     """Kantitatif analiz motoru"""
     try:
         logger.info(f"🔍 Analiz: {ev_adi} vs {dep_adi} - {dk}'")
-        
-        # Nesine lig kontrolü
-        nesine_de_mi = nesine_lig_kontrolu(ev_adi, dep_adi)
         
         v = veri_cikart(ev_v, dep_v)
         
@@ -387,23 +311,8 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session):
             logger.debug(f"⏱️ Dakika aralık dışı: {dk}")
             return None
         
-        # Dakika anomalisi kontrolü
-        if dk < 30 and toplam_gol >= 3:
-            logger.warning(f"⚠️ Dakika anomalisi: {dk}' ama {toplam_gol} gol")
-            return None
-        
-        if dk < 45 and (ta > 150 or da > 100):
-            logger.warning(f"⚠️ Dakika anomalisi: {dk}' ama TA:{ta}, DA:{da}")
-            return None
-        
-        if dk > 0:
-            atak_per_dakika = ta / dk
-            if atak_per_dakika > 5.0:
-                logger.warning(f"⚠️ Dakika anomalisi: {atak_per_dakika:.1f} atak/dk")
-                return None
-        
         if ta < da or da < sot or ta < sot:
-            logger.warning(f"❌ Fiziksel hiyerarşi ihlali")
+            logger.warning(f"❌ Fiziksel hiyerarşi ihlali: TA:{ta}, DA:{da}, SOT:{sot}")
             return None
         
         if sot < toplam_gol:
@@ -411,7 +320,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session):
             return None
         
         if dk > 0 and sot > (dk * 0.7):
-            logger.warning(f"❌ SOT limiti aşıldı")
+            logger.warning(f"❌ SOT limiti aşıldı: {sot} > {dk * 0.7}")
             return None
         
         # Puanlama
@@ -438,8 +347,10 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session):
         
         # Sinyal oluşturma
         if puan >= 7.0:
+            # Detaylı tavsiye oluştur
             tahminler, gri_alan = detayli_tavsiye_olustur(v, ev_gol, dep_gol, dk, skor_durum, zaman_durumu)
             
+            # Gemini AI analizi
             mac_verisi = {
                 'ev_adi': ev_adi, 'dep_adi': dep_adi, 'skor': skor, 'dakika': dk,
                 'ta': ta, 'da': da, 'sot': sot, 'gol': toplam_gol,
@@ -480,12 +391,9 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session):
                 mesaj += f"🤖 **Gemini AI:**\n{ai_analiz}\n"
             
             mesaj += f"{'='*30}\n"
-            if nesine_de_mi:
-                mesaj += f"ℹ️ Bu maç Nesine'de oynanıyor"
-            else:
-                mesaj += f"⚠️ Bu maç Nesine'de oynanmıyor"
+            mesaj += f"ℹ️ Bu maç Nesine'de oynanıyor"
             
-            logger.info(f"✅ SİNYAL OLUŞTURULDU")
+            logger.info(f"✅ SİNYAL OLUŞTURULDU (AI: {'✅' if ai_analiz else '❌'})")
             return mesaj
         else:
             logger.info(f"📉 Puan yetersiz: {round(puan, 1)} < 7.0")
@@ -561,16 +469,14 @@ async def ana_dongu():
         await bot.send_message(
             chat_id=CHAT_ID,
             text=(
-                "🛡️ **V43.0 COMPLETE FINAL**\n\n"
-                "🎯 **Özellikler:**\n"
-                "• Altın Pencere: 55-60 dakika\n"
-                "• Kaos/Rölanti filtreleri\n"
-                "• SOT epilasyon kontrolü\n"
-                "• Dakika anomalisi tespiti\n"
-                "• Nesine lig filtresi\n"
-                "• Gece 00:00-06:00 arası kapalı\n"
-                "• Detaylı tahmin + Gri alan\n"
-                "• Gemini AI analizi"
+                "🛡️ **V42.0 DETAYLI TAHMİN SİSTEMİ**\n\n"
+                "🎯 **Yeni Özellikler:**\n"
+                "• Detaylı tahmin sistemi (Hangi takım gol atacak)\n"
+                "• Alt/Üst gol tahminleri (2.5, 3.5, 4.5)\n"
+                "• Gri alan analizi (Tempo, Momentum, Baskınlık)\n"
+                "• Şut verimliliği analizi\n\n"
+                "⭐ Literatür bazlı filtreler aktif\n"
+                "🤖 Gemini AI detaylı analiz"
             )
         )
         logger.info("✅ Başlangıç mesajı gönderildi")
@@ -586,4 +492,66 @@ async def ana_dongu():
             dongu_sayaci += 1
             logger.info(f"{'='*60}")
             logger.info(f"🔄 DÖNGÜ #{dongu_sayaci}")
-            logger.info(f"{'
+            logger.info(f"{'='*60}")
+            
+            try:
+                async with session.get(
+                    f"https://api.betsapi.com/v3/bet365/inplay_filter?token={BETSAPI_TOKEN}&sport_id=1",
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    
+                    if response.status != 200:
+                        logger.error(f"❌ API hatası: HTTP {response.status}")
+                        await asyncio.sleep(60)
+                        continue
+                    
+                    data = await response.json()
+                    matches = data.get('results', [])
+                
+                logger.info(f"📥 {len(matches)} canlı maç bulundu")
+                
+                for idx, mac in enumerate(esnek_liste_duzelt(matches)):
+                    mac_id = str(mac.get('id') or mac.get('FI', ''))
+                    
+                    if not mac_id or mac_id in bildirim_gonderilen:
+                        continue
+                    
+                    logger.info(f"🔍 Maç #{idx+1}/{len(matches)}: {mac_id}")
+                    
+                    mesaj = await mac_isle(bot, mac_id, session)
+                    
+                    if mesaj:
+                        await bot.send_message(
+                            chat_id=CHAT_ID,
+                            text=mesaj,
+                            parse_mode="Markdown"
+                        )
+                        bildirim_gonderilen.append(mac_id)
+                        logger.info(f"✅ Bildirim gönderildi: {mac_id}")
+                
+                logger.info(f"✅ Döngü #{dongu_sayaci} tamamlandı")
+                logger.info(f"🤖 Gemini AI çağrı sayısı: {gemini_ai.api_call_count}")
+                
+            except Exception as e:
+                logger.error(f"❌ Ana döngü hatası: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+            
+            logger.info("⏳ 60 saniye bekleniyor...\n")
+            await asyncio.sleep(60)
+
+if __name__ == "__main__":
+    logger.info("🚀 V42.0 Detaylı Tahmin Sistemi Başlatılıyor...")
+    logger.info(f"📍 Telegram Token: {'✅' if TELEGRAM_TOKEN else '❌'}")
+    logger.info(f"📍 Chat ID: {'✅' if CHAT_ID else '❌'}")
+    logger.info(f"📍 BetsAPI Token: {'✅' if BETSAPI_TOKEN else '❌'}")
+    logger.info(f"📍 Gemini API Keys: {len([k for k in [GEMINI_API_KEY_1, GEMINI_API_KEY_2, GEMINI_API_KEY_3] if k])}/3")
+    
+    try:
+        asyncio.run(ana_dongu())
+    except KeyboardInterrupt:
+        logger.info("⚠️ Bot kullanıcı tarafından durduruldu")
+    except Exception as e:
+        logger.error(f"❌ Kritik hata: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
