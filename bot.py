@@ -366,9 +366,9 @@ def altin_pencere_kontrol(dakika):
     - 48-58 dk: İkinci Yarı Kırılma Evresi (yüksek enerji, savunma organize değil)
     """
     if 24 <= dakika <= 36:
-        return 3.5, "ALTIN_PENCERE_1_OLGUNLASMA"  # İlk yarı olgunlaşma
+        return 3.5, "OLGUNLAŞMA EVRESİ"  # İlk yarı olgunlaşma
     elif 48 <= dakika <= 58:
-        return 5.0, "ALTIN_PENCERE_2_KIRILMA"  # İkinci yarı kırılma (en güçlü)
+        return 5.0, "KIRILMA EVRESİ"  # İkinci yarı kırılma (en güçlü)
     elif 60 < dakika <= 75:
         return 1.5, "GECIS_OYUNU"
     else:
