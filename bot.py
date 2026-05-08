@@ -826,24 +826,28 @@ async def ana_dongu():
         await bot.send_message(
             chat_id=CHAT_ID,
             text=(
-                "🚀 **BOT V44 LİTERATÜR PRO - VERİ KORUMALI**\n\n"
-                "🎯 **Yeni Özellikler:**\n"
+                "🚀 **BOT V44 LİTERATÜR PRO - INPLAY MODE**\n\n"
+                "⚠️ **ÖNEMLI:** Bot sadece inplay endpoint'iyle çalışıyor\n"
+                "   (Event detay endpoint PERMISSION_DENIED)\n\n"
+                "🎯 **Özellikler:**\n"
                 "• ✅ Regex Filtreler: U19/Reserves/E-spor güçlü tespit\n"
                 "• ✅ Altın Pencere: 24-36 dk (İlk yarı) + 48-58 dk (İkinci yarı)\n"
                 "• ✅ Sezgisel Gemini AI: Kontra atak riski, 'ama' diyebilen\n"
                 "• ✅ Kaos/Rölanti Filtreleri: Toplam gol < 5, Fark < 3\n"
                 "• ✅ SOT Kontrolü: SOT <= 8\n"
-                "• ⭐ YENİ: Oyun Durumu Normalizasyonu (skor farkı bazlı)\n"
-                "• ⭐ YENİ: Korner Tuzağı Kontrolü (sahte baskı tespiti)\n"
-                "• ⭐ YENİ: Çok Katmanlı Doğrulama (VU/VA/USA)\n"
-                "• 🛡️ YENİ: Veri Koruma Katmanı (S-kod dinamik tespit)\n"
-                "• 🛡️ YENİ: Fiziksel Hiyerarşi Doğrulama (TA>=DA>=SOT>=Gol)\n"
-                "• 🛡️ YENİ: Akıllı S-kod Adaptasyonu\n\n"
+                "• ✅ Oyun Durumu Normalizasyonu (skor farkı bazlı)\n"
+                "• ✅ Korner Tuzağı Kontrolü (sahte baskı tespiti)\n"
+                "• ✅ Çok Katmanlı Doğrulama (VU/VA/USA)\n"
+                "• 🛡️ Veri Koruma Katmanı (S-kod dinamik tespit)\n"
+                "• 🛡️ Fiziksel Hiyerarşi Doğrulama (TA>=DA>=SOT>=Gol)\n"
+                "• 🛡️ Akıllı S-kod Adaptasyonu\n\n"
                 "📊 **Hedef Başarı:** %85-90\n"
-                "🎯 **Minimum Eşik:** 9.0 (7.0'dan yükseltildi)\n"
+                "🎯 **Minimum Eşik:** 9.0\n"
                 "🤖 **AI:** Temperature 0.9 (Yaratıcı)\n"
                 "🛡️ **Veri Koruma:** Aktif\n"
-                "✅ Tüm güvenlik kontrolleri aktif"
+                "📡 **Veri Kaynağı:** Inplay endpoint only\n\n"
+                "⚠️ **NOT:** İstatistikler inplay verisinden alınıyor.\n"
+                "Eğer maçlarda istatistik yoksa, bot o maçları atlayacak."
             )
         )
         logger.info("✅ Başlangıç mesajı gönderildi")
