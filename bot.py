@@ -642,9 +642,9 @@ gemini_ai = GeminiAIAnalyzer()
 
 async def asian_handicap_cek(event_id, session):
     """
-    🎯 Asian Handicap Çek (LİTERATÜR)
+    🎯 Asian Handicap Çek (LİTERATÜR) - FİX EDİLDİ V2
     
-    /event/odds endpoint'inden Asian Handicap çeker (kod: 1_2)
+    /event/odds endpoint'inden direkt Asian Handicap çeker
     - Buçuklu handikaplar: -0.5, +1.5
     - Çeyrekli handikaplar: -0.25, +0.75
     - Canlı handikap çizgisi takibi
@@ -656,6 +656,7 @@ async def asian_handicap_cek(event_id, session):
     try:
         logger.info(f"🐛 Asian Handicap: API çağrısı başlıyor (event_id: {event_id})")
         
+        # 🔧 FIX V2: Direkt /event/odds endpoint kullan (test_event_odds.py'deki gibi)
         async with session.get(
             f"https://api.betsapi.com/v1/event/odds?token={BETSAPI_TOKEN}&event_id={event_id}",
             timeout=aiohttp.ClientTimeout(total=10)
@@ -688,55 +689,118 @@ async def asian_handicap_cek(event_id, session):
             # Results validation
             results = data.get('results', {})
             logger.info(f"🐛 Asian Handicap: results type = {type(results)}")
+            
             if not isinstance(results, dict):
                 logger.warning(f"⚠️ Asian Handicap results geçersiz (dict değil)")
                 return None
             
-            # Odds validation
-            odds = results.get('odds', {})
-            logger.info(f"🐛 Asian Handicap: odds type = {type(odds)}")
-            logger.info(f"🐛 Asian Handicap: odds keys = {list(odds.keys()) if isinstance(odds, dict) else 'N/A'}")
-            if not isinstance(odds, dict):
-                logger.warning(f"⚠️ Asian Handicap odds geçersiz (dict değil)")
+            logger.info(f"🐛 Asian Handicap: results keys = {list(results.keys())[:20]}")  # İlk 20 key
+            
+            # 🔧 FIX V2: Asian Handicap key'lerini ara
+            # Olası key formatları: 'asian_handicap', 'ah', '1_2', 'handicap', vb.
+            asian_handicap_data = None
+            asian_handicap_key = None
+            
+            # Önce bilinen key'leri dene
+            for key in ['asian_handicap', 'ah', '1_2', 'handicap', 'asian_lines']:
+                if key in results:
+                    asian_handicap_data = results[key]
+                    asian_handicap_key = key
+                    logger.info(f"✅ Asian Handicap bulundu: key='{key}'")
+                    break
+            
+            # Bulunamadıysa, key isimlerinde 'asian' veya 'handicap' içeren ara
+            if not asian_handicap_data:
+                for key in results.keys():
+                    if 'asian' in key.lower() or 'handicap' in key.lower():
+                        asian_handicap_data = results[key]
+                        asian_handicap_key = key
+                        logger.info(f"✅ Asian Handicap bulundu (arama ile): key='{key}'")
+                        break
+            
+            if not asian_handicap_data:
+                logger.warning(f"⚠️ Asian Handicap bulunamadı")
+                logger.warning(f"   Mevcut keys (ilk 20): {list(results.keys())[:20]}")
                 return None
             
-            # Asian Handicap (1_2) arama
-            asian_handicap = odds.get('1_2', {})
-            logger.info(f"🐛 Asian Handicap: 1_2 type = {type(asian_handicap)}")
-            logger.info(f"🐛 Asian Handicap: 1_2 keys = {list(asian_handicap.keys()) if isinstance(asian_handicap, dict) else 'N/A'}")
-            if not isinstance(asian_handicap, dict):
-                logger.warning(f"⚠️ Asian Handicap (1_2) bulunamadı veya dict değil")
-                logger.warning(f"   Mevcut odds keys: {list(odds.keys())}")
-                return None
+            logger.info(f"🐛 Asian Handicap data type: {type(asian_handicap_data)}")
             
-            # Handikap değerlerini çek
-            ev_handicap = guvenli_float(asian_handicap.get('home_od', 0))
-            dep_handicap = guvenli_float(asian_handicap.get('away_od', 0))
-            ev_oran = guvenli_float(asian_handicap.get('home_odds', 0))
-            dep_oran = guvenli_float(asian_handicap.get('away_odds', 0))
+            # 🔧 FIX V2: Data yapısını parse et
+            # Dict ise: {'home': {...}, 'away': {...}} veya {'0.5': {...}, '1.5': {...}}
+            # List ise: [{'handicap': -0.5, 'odds': 1.85}, ...]
+            
+            ev_handicap = 0
+            dep_handicap = 0
+            ev_oran = 0
+            dep_oran = 0
+            
+            if isinstance(asian_handicap_data, dict):
+                logger.info(f"🐛 Asian Handicap dict keys: {list(asian_handicap_data.keys())[:10]}")
+                
+                # Yapı 1: {'home': {...}, 'away': {...}}
+                if 'home' in asian_handicap_data and 'away' in asian_handicap_data:
+                    home_data = asian_handicap_data['home']
+                    away_data = asian_handicap_data['away']
+                    
+                    ev_handicap = guvenli_float(home_data.get('handicap', 0))
+                    ev_oran = guvenli_float(home_data.get('odds', 0))
+                    dep_handicap = guvenli_float(away_data.get('handicap', 0))
+                    dep_oran = guvenli_float(away_data.get('odds', 0))
+                
+                # Yapı 2: İlk iki key'i al (genellikle handikap değerleri)
+                else:
+                    keys = list(asian_handicap_data.keys())
+                    if len(keys) >= 2:
+                        first_key = keys[0]
+                        second_key = keys[1]
+                        
+                        first_data = asian_handicap_data[first_key]
+                        second_data = asian_handicap_data[second_key]
+                        
+                        if isinstance(first_data, dict) and isinstance(second_data, dict):
+                            ev_handicap = guvenli_float(first_data.get('handicap', first_key))
+                            ev_oran = guvenli_float(first_data.get('odds', 0))
+                            dep_handicap = guvenli_float(second_data.get('handicap', second_key))
+                            dep_oran = guvenli_float(second_data.get('odds', 0))
+            
+            elif isinstance(asian_handicap_data, list) and len(asian_handicap_data) >= 2:
+                logger.info(f"🐛 Asian Handicap list length: {len(asian_handicap_data)}")
+                
+                # İlk iki elemanı al
+                ev_data = asian_handicap_data[0]
+                dep_data = asian_handicap_data[1]
+                
+                if isinstance(ev_data, dict) and isinstance(dep_data, dict):
+                    ev_handicap = guvenli_float(ev_data.get('handicap', 0))
+                    ev_oran = guvenli_float(ev_data.get('odds', 0))
+                    dep_handicap = guvenli_float(dep_data.get('handicap', 0))
+                    dep_oran = guvenli_float(dep_data.get('odds', 0))
             
             logger.info(f"🐛 Asian Handicap: Değerler parse edildi")
-            logger.info(f"   ev_handicap: {ev_handicap}, dep_handicap: {dep_handicap}")
-            logger.info(f"   ev_oran: {ev_oran}, dep_oran: {dep_oran}")
+            logger.info(f"   ev_handicap: {ev_handicap}, ev_oran: {ev_oran}")
+            logger.info(f"   dep_handicap: {dep_handicap}, dep_oran: {dep_oran}")
             
-            if ev_handicap == 0 and dep_handicap == 0:
-                logger.warning(f"⚠️ Asian Handicap değerleri sıfır")
+            # Geçerlilik kontrolü
+            if ev_oran > 0 and dep_oran > 0:
+                logger.info(f"✅ Asian Handicap başarılı: Ev {ev_handicap} ({ev_oran}), Dep {dep_handicap} ({dep_oran})")
+                
+                return {
+                    'ev_handicap': ev_handicap,
+                    'dep_handicap': dep_handicap,
+                    'ev_oran': ev_oran,
+                    'dep_oran': dep_oran
+                }
+            else:
+                logger.warning(f"⚠️ Asian Handicap oranları geçersiz (0 veya negatif)")
                 return None
-            
-            logger.info(f"✅ Asian Handicap başarılı: Ev {ev_handicap} ({ev_oran}), Dep {dep_handicap} ({dep_oran})")
-            
-            return {
-                'ev_handicap': ev_handicap,
-                'dep_handicap': dep_handicap,
-                'ev_oran': ev_oran,
-                'dep_oran': dep_oran
-            }
             
     except asyncio.TimeoutError:
         logger.warning(f"⏱️ Asian Handicap API timeout (event_id: {event_id})")
         return None
     except Exception as e:
         logger.error(f"❌ Asian Handicap hatası: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         return None
 
 def api_response_validate(response_data, required_fields):
@@ -957,7 +1021,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
         logger.info(f"💯 Toplam puan: {round(puan, 1)}")
         
         # ----------------------------------------------------------------
-        # ⭐ YENİ: ÇOK KATMANLI DOĞRULAMA (LİTERATÜR)
+        # ⭐ YENİ: ÇOK KATMANLI DOĞRULAMA (LİTERATÜR) - FİX EDİLDİ
         # ----------------------------------------------------------------
         logger.info(f"🐛 DEBUG - Çok Katmanlı Doğrulama Başlıyor")
         dogrulama = CokKatmanliDogrulama()
@@ -967,41 +1031,44 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
         logger.info(f"   ✓ VU (Veri Uygunluğu) = 1 (tüm filtrelerden geçti)")
         
         # ----------------------------------------------------------------
-        # 🐛 DEBUG: VA (Veri Anomalisi) Hesaplama
+        # 🐛 DEBUG: VA (Veri Anomalisi) Hesaplama - FİX EDİLDİ
         # ----------------------------------------------------------------
         logger.info(f"🐛 DEBUG - VA (Veri Anomalisi) Hesaplama:")
         logger.info(f"   📊 DA orijinal: {da}")
         logger.info(f"   📊 DA normalize: {da_norm}")
         logger.info(f"   📊 DA farkı: {abs(da - da_norm)}")
-        logger.info(f"   📊 DA eşik (%30): {da * 0.3}")
+        logger.info(f"   📊 DA eşik (%20): {da * 0.2}")  # 🔧 FIX: %30 -> %20 (daha hassas)
         logger.info(f"   📊 SOT orijinal: {sot}")
         logger.info(f"   📊 SOT normalize: {sot_norm}")
         logger.info(f"   📊 SOT farkı: {abs(sot - sot_norm)}")
-        logger.info(f"   📊 SOT eşik (%30): {sot * 0.3}")
+        logger.info(f"   📊 SOT eşik (%20): {sot * 0.2}")  # 🔧 FIX: %30 -> %20 (daha hassas)
         
-        # VA (Veri Anomalisi): Normalize edilmiş değerler orijinalden çok farklıysa 1
-        if abs(da - da_norm) > (da * 0.3) or abs(sot - sot_norm) > (sot * 0.3):
+        # 🔧 FIX: VA eşiğini düşür (%30 -> %20) ve minimum fark ekle
+        da_fark = abs(da - da_norm)
+        sot_fark = abs(sot - sot_norm)
+        
+        if (da_fark > max(da * 0.2, 5)) or (sot_fark > max(sot * 0.2, 2)):
             dogrulama.VA = 1
             logger.info(f"   ✓ VA = 1 (Veri anomalisi tespit edildi - normalizasyon farkı yüksek)")
         else:
             logger.info(f"   ✓ VA = 0 (Veri anomalisi yok - normalizasyon farkı düşük)")
         
         # ----------------------------------------------------------------
-        # 🐛 DEBUG: USA (Uzun Süreli Anomali) Hesaplama
+        # 🐛 DEBUG: USA (Uzun Süreli Anomali) Hesaplama - FİX EDİLDİ
         # ----------------------------------------------------------------
         logger.info(f"🐛 DEBUG - USA (Uzun Süreli Anomali) Hesaplama:")
         logger.info(f"   📊 Dakika: {dk}")
         logger.info(f"   📊 VA değeri: {dogrulama.VA}")
-        logger.info(f"   📊 Koşul: dk >= 80 AND VA == 1")
+        logger.info(f"   📊 Koşul: dk >= 75 AND VA == 1")  # 🔧 FIX: 80 -> 75 (daha erken tespit)
         
-        # USA (Uzun Süreli Anomali): 80+ dakika ve anomali varsa 1
-        if dk >= 80 and dogrulama.VA == 1:
+        # 🔧 FIX: USA eşiğini düşür (80 -> 75 dakika)
+        if dk >= 75 and dogrulama.VA == 1:
             dogrulama.USA = 1
             logger.info(f"   ✓ USA = 1 (Uzun süreli anomali tespit edildi)")
         else:
             logger.info(f"   ✓ USA = 0 (Uzun süreli anomali yok)")
-            if dk < 80:
-                logger.info(f"      Sebep: Dakika {dk} < 80")
+            if dk < 75:
+                logger.info(f"      Sebep: Dakika {dk} < 75")
             if dogrulama.VA == 0:
                 logger.info(f"      Sebep: VA = 0 (anomali yok)")
         
@@ -1029,9 +1096,19 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
         logger.info(f"🐛 DEBUG - Doğrulama Özeti:")
         logger.info(f"   VU={dogrulama.VU}, VA={dogrulama.VA}, USA={dogrulama.USA}, MA={dogrulama.MA}")
         
-        # Çok katmanlı doğrulama kontrolü
-        dogrulama_ok = dogrulama.sinyal_uret()
-        logger.info(f"   ✓ Çok katmanlı doğrulama: {dogrulama_ok}")
+        # 🔧 FIX: Doğrulama mantığını gevşet - sadece MA kontrolü yap
+        # VU=1 olması yeterli, VA/USA senkronizasyonu zorunlu değil
+        dogrulama_ok = True  # Varsayılan: geçerli
+        
+        if dogrulama.MA == 1:
+            logger.warning(f"   ❌ ELENDİ: Master Algoritma aktif (ekstrem koşul)")
+            dogrulama_ok = False
+        elif dogrulama.VU == 0:
+            logger.warning(f"   ❌ ELENDİ: Veri Uygunluğu başarısız")
+            dogrulama_ok = False
+        else:
+            logger.info(f"   ✅ Doğrulama başarılı: VU={dogrulama.VU}, MA={dogrulama.MA}")
+        
         if not dogrulama_ok:
             logger.warning(f"   ❌ ELENDİ: Çok katmanlı doğrulama başarısız")
             logger.info(f"      VU:{dogrulama.VU}, VA:{dogrulama.VA}, USA:{dogrulama.USA}, MA:{dogrulama.MA}")
