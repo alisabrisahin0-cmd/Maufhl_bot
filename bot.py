@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Tam API Response Kontrolü
-BetsAPI'den gelen tüm verileri gösterir (Asian Handicap, Odds, Stats vb.)
+Event Odds Endpoint Test
+BetsAPI /event/odds endpoint'ini test eder - Asian Handicap kontrolü
 """
 
 import os
@@ -18,7 +18,7 @@ if not BETSAPI_TOKEN:
     exit(1)
 
 print("=" * 80)
-print("🔍 TAM API RESPONSE KONTROLÜ")
+print("🎲 EVENT ODDS ENDPOINT TEST - ASIAN HANDICAP KONTROLÜ")
 print("=" * 80)
 print(f"Token: {BETSAPI_TOKEN[:10]}...{BETSAPI_TOKEN[-5:]}")
 print(f"⏰ Zaman: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -50,7 +50,7 @@ except Exception as e:
     print(f"❌ Hata: {e}")
     exit(1)
 
-# 2. İlk maçın FULL detayını göster
+# 2. İlk maçın odds bilgisini çek
 if matches:
     first_match = matches[0]
     match_id = first_match.get('id')
@@ -58,137 +58,118 @@ if matches:
     away_team = first_match.get('away', {}).get('name', 'N/A')
     
     print("=" * 80)
-    print(f"🏆 İLK MAÇ DETAYI")
+    print(f"🏆 TEST MAÇI")
     print("=" * 80)
     print(f"Maç: {home_team} vs {away_team}")
     print(f"ID: {match_id}")
     print()
     
-    # Event detay çek
-    print("📡 Event detay API çağrısı yapılıyor...")
-    event_url = f"https://api.betsapi.com/v1/event/view?token={BETSAPI_TOKEN}&event_id={match_id}"
+    # Event odds çek
+    print("📡 /event/odds endpoint'i test ediliyor...")
+    odds_url = f"https://api.betsapi.com/v1/event/odds?token={BETSAPI_TOKEN}&event_id={match_id}"
     
     try:
-        event_response = requests.get(event_url, timeout=10)
+        odds_response = requests.get(odds_url, timeout=10)
         
-        if event_response.status_code != 200:
-            print(f"❌ HTTP {event_response.status_code}")
+        print(f"HTTP Status: {odds_response.status_code}")
+        
+        if odds_response.status_code != 200:
+            print(f"❌ HTTP {odds_response.status_code}")
+            print(f"Response: {odds_response.text[:500]}")
             exit(1)
         
-        event_data = event_response.json()
+        odds_data = odds_response.json()
         
-        if not event_data.get('success'):
-            print(f"❌ API Hatası: {event_data.get('error')}")
+        # Tam response'u kaydet
+        with open('event_odds_response.json', 'w', encoding='utf-8') as f:
+            json.dump(odds_data, f, indent=2, ensure_ascii=False)
+        
+        print("✅ Tam response 'event_odds_response.json' dosyasına kaydedildi")
+        print()
+        
+        if not odds_data.get('success'):
+            print(f"❌ API Hatası: {odds_data.get('error')}")
+            print(f"Error Detail: {odds_data.get('error_detail')}")
             exit(1)
         
-        results = event_data.get('results', [])
-        if not results:
-            print(f"❌ Results boş")
-            exit(1)
+        # Ana yapıyı göster
+        print("=" * 80)
+        print("📋 ODDS RESPONSE YAPISI")
+        print("=" * 80)
         
-        event_info = results[0]
-        
-        # Tam response'u JSON dosyasına kaydet
-        with open('full_api_response.json', 'w', encoding='utf-8') as f:
-            json.dump(event_info, f, indent=2, ensure_ascii=False)
-        
-        print("✅ Tam response 'full_api_response.json' dosyasına kaydedildi")
+        print(f"Ana keys: {list(odds_data.keys())}")
         print()
         
-        # Ana alanları göster
-        print("=" * 80)
-        print("📋 ANA ALANLAR")
-        print("=" * 80)
-        
-        for key in event_info.keys():
-            print(f"  • {key}")
-        
+        results = odds_data.get('results', {})
+        print(f"Results tipi: {type(results)}")
+        print(f"Results keys: {list(results.keys()) if isinstance(results, dict) else 'N/A'}")
         print()
-        
-        # Stats detayı
-        print("=" * 80)
-        print("📊 STATS DETAYI")
-        print("=" * 80)
-        
-        stats = event_info.get('stats', {})
-        if stats:
-            print(f"Stats tipi: {type(stats)}")
-            print(f"Stats keys: {list(stats.keys())}")
-            print()
-            
-            for key, value in stats.items():
-                print(f"  • {key}: {value} (tip: {type(value).__name__})")
-        else:
-            print("❌ Stats yok")
-        
-        print()
-        
-        # Odds/Bahis bilgileri
-        print("=" * 80)
-        print("💰 ODDS/BAHİS BİLGİLERİ")
-        print("=" * 80)
         
         # Asian Handicap kontrolü
-        asian_handicap_keys = [k for k in event_info.keys() if 'asian' in k.lower() or 'handicap' in k.lower()]
-        if asian_handicap_keys:
-            print("✅ Asian Handicap alanları bulundu:")
-            for key in asian_handicap_keys:
-                print(f"  • {key}: {event_info.get(key)}")
-        else:
-            print("❌ Asian Handicap alanı bulunamadı")
+        print("=" * 80)
+        print("🎯 ASIAN HANDICAP KONTROLÜ")
+        print("=" * 80)
         
-        print()
+        asian_handicap_found = False
         
-        # Odds kontrolü
-        odds_keys = [k for k in event_info.keys() if 'odd' in k.lower() or 'bet' in k.lower()]
-        if odds_keys:
-            print("✅ Odds alanları bulundu:")
-            for key in odds_keys:
-                value = event_info.get(key)
-                if isinstance(value, dict):
-                    print(f"  • {key}: {len(value)} item")
+        # Tüm keys'lerde asian handicap ara
+        for key in results.keys() if isinstance(results, dict) else []:
+            if 'asian' in key.lower() or 'handicap' in key.lower() or 'ah' in key.lower():
+                asian_handicap_found = True
+                print(f"✅ Asian Handicap bulundu: {key}")
+                
+                ah_data = results.get(key)
+                print(f"   Tip: {type(ah_data)}")
+                
+                if isinstance(ah_data, dict):
+                    print(f"   Keys: {list(ah_data.keys())[:10]}")  # İlk 10 key
+                elif isinstance(ah_data, list):
+                    print(f"   Liste uzunluğu: {len(ah_data)}")
+                    if ah_data:
+                        print(f"   İlk item: {ah_data[0]}")
                 else:
-                    print(f"  • {key}: {value}")
-        else:
-            print("❌ Odds alanı bulunamadı")
+                    print(f"   Değer: {ah_data}")
+                print()
+        
+        if not asian_handicap_found:
+            print("❌ Asian Handicap alanı bulunamadı")
+            print()
+            print("📋 Mevcut odds tipleri:")
+            for key in list(results.keys())[:20]:  # İlk 20 key
+                print(f"   • {key}")
         
         print()
         
-        # Skor ve timer
+        # Diğer bahis tipleri
         print("=" * 80)
-        print("⚽ SKOR VE SÜRE BİLGİLERİ")
-        print("=" * 80)
-        
-        print(f"  • ss (skor): {event_info.get('ss')}")
-        print(f"  • scores: {event_info.get('scores')}")
-        print(f"  • timer: {event_info.get('timer')}")
-        print(f"  • time_status: {event_info.get('time_status')}")
-        
-        print()
-        
-        # Takım bilgileri
-        print("=" * 80)
-        print("👥 TAKIM BİLGİLERİ")
+        print("💰 DİĞER BAHİS TİPLERİ")
         print("=" * 80)
         
-        home = event_info.get('home', {})
-        away = event_info.get('away', {})
+        # 1X2
+        if '1_1' in results or 'home_away' in results or '1x2' in results:
+            print("✅ 1X2 (Maç Sonucu) bulundu")
         
-        print(f"Ev Sahibi:")
-        for key, value in home.items():
-            print(f"  • {key}: {value}")
+        # Over/Under
+        ou_keys = [k for k in results.keys() if 'over' in k.lower() or 'under' in k.lower() or 'ou' in k.lower()]
+        if ou_keys:
+            print(f"✅ Over/Under bulundu: {ou_keys[:3]}")
         
-        print()
-        print(f"Deplasman:")
-        for key, value in away.items():
-            print(f"  • {key}: {value}")
+        # Corners
+        corner_keys = [k for k in results.keys() if 'corner' in k.lower()]
+        if corner_keys:
+            print(f"✅ Korner bahisleri bulundu: {corner_keys[:3]}")
+        
+        # Goals
+        goal_keys = [k for k in results.keys() if 'goal' in k.lower()]
+        if goal_keys:
+            print(f"✅ Gol bahisleri bulundu: {goal_keys[:3]}")
         
         print()
         print("=" * 80)
-        print("✅ Kontrol tamamlandı")
+        print("✅ Test tamamlandı")
         print("=" * 80)
         print()
-        print("💡 Detaylı inceleme için 'full_api_response.json' dosyasını açın")
+        print("💡 Detaylı inceleme için 'event_odds_response.json' dosyasını açın")
         
     except Exception as e:
         print(f"❌ Hata: {e}")
