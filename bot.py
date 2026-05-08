@@ -1,6 +1,7 @@
 import asyncio, aiohttp, os, urllib.parse, logging, re, time
 from telegram import Bot
 from collections import deque
+from veri_koruma_katmani import VeriKorumaKatmani
 
 # ============================================================================
 # KONFIGÜRASYON
@@ -15,6 +16,9 @@ GEMINI_API_KEY_2 = os.getenv("GEMINI_API_KEY_2", "")
 GEMINI_API_KEY_3 = os.getenv("GEMINI_API_KEY_3", "")
 
 bildirim_gonderilen = deque(maxlen=1000)
+
+# 🛡️ Veri Koruma Katmanı
+veri_koruma = VeriKorumaKatmani()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -140,6 +144,71 @@ def sot_epilasyon_kontrol(sot):
         return -1.0  # Ceza puanı
 
 # ============================================================================
+# ⭐⭐⭐ YENİ KRİTİK ÖZELLİKLER (FAZ 1)
+# ============================================================================
+
+def oyun_durumu_normalizasyonu(ev_gol, dep_gol, ev_da, dep_da, ev_sot, dep_sot, dakika):
+    """
+    🎯 Oyun Durumu Normalizasyonu
+    Skor farkına göre istatistikleri normalize eder
+    """
+    skor_farki = ev_gol - dep_gol
+    if skor_farki >= 2:
+        return ev_da * 0.7, ev_sot * 0.7, dep_da, dep_sot
+    elif skor_farki <= -2:
+        return ev_da, ev_sot, dep_da * 0.7, dep_sot * 0.7
+    elif dakika >= 80 and abs(skor_farki) >= 1:
+        if skor_farki > 0:
+            return ev_da * 0.5, ev_sot * 0.5, dep_da, dep_sot
+        else:
+            return ev_da, ev_sot, dep_da * 0.5, dep_sot * 0.5
+    return ev_da, ev_sot, dep_da, dep_sot
+
+def korner_tuzagi_kontrolu(ev_korner, dep_korner, ev_sot, dep_sot):
+    """
+    🎯 Korner Tuzağı Kontrolü
+    Korner sayısı yüksek ama şut düşükse sahte baskı var demektir
+    """
+    toplam_korner = ev_korner + dep_korner
+    toplam_sot = ev_sot + dep_sot
+    if toplam_korner > 0 and toplam_sot > 0:
+        if (toplam_korner / toplam_sot) > 1.5:
+            logger.warning(f"⚠️ Korner tuzağı: Korner/SOT oranı yüksek ({toplam_korner}/{toplam_sot})")
+            return False
+    if ev_korner >= 8 and ev_sot < 5:
+        logger.warning(f"⚠️ Ev sahibi korner tuzağı: {ev_korner} korner, {ev_sot} şut")
+        return False
+    if dep_korner >= 8 and dep_sot < 5:
+        logger.warning(f"⚠️ Deplasman korner tuzağı: {dep_korner} korner, {dep_sot} şut")
+        return False
+    return True
+
+class CokKatmanliDogrulama:
+    """
+    🎯 Çok Katmanlı Doğrulama Sistemi
+    VU (Veri Uygunluğu), VA (Veri Anomalisi), USA (Uzun Süreli Anomali)
+    """
+    def __init__(self):
+        self.VU = 0  # Veri Uygunluğu
+        self.VA = 0  # Veri Anomalisi
+        self.USA = 0  # Uzun Süreli Anomali
+    
+    def sinyal_uret(self):
+        """
+        Sinyal üretim mantığı:
+        - VA=0 ve USA=1 ise: False (Uzun süreli anomali var)
+        - VU=1 ve diğer kombinasyonlar: True
+        """
+        if self.VA == 0 and self.USA == 1:
+            logger.warning("❌ Çok katmanlı doğrulama: VA=0 ve USA=1")
+            return False
+        if self.VU == 1 and ((self.VA == 0 and self.USA == 0) or (self.VA == 1 and self.USA == 1) or (self.VA == 1 and self.USA == 0)):
+            logger.info("✅ Çok katmanlı doğrulama: Sinyal onaylandı")
+            return True
+        logger.warning("❌ Çok katmanlı doğrulama: Sinyal reddedildi")
+        return False
+
+# ============================================================================
 # GEMİNİ AI ENTEGRASYONu
 # ============================================================================
 
@@ -245,17 +314,31 @@ def guvenli_int(deger, varsayilan=0):
         return varsayilan
 
 def veri_cikart(ev_v, dep_v):
-    """S-kodlarından veri çıkarır (Sabit eşleştirme: S1=SOT, S3=TA, S4=DA, SC=Gol)"""
-    return {
-        'ev_sot': guvenli_int(ev_v.get('S1', 0)),
-        'ev_ta': guvenli_int(ev_v.get('S3', 0)),
-        'ev_da': guvenli_int(ev_v.get('S4', 0)),
-        'ev_gol': guvenli_int(ev_v.get('SC', 0)),
-        'dep_sot': guvenli_int(dep_v.get('S1', 0)),
-        'dep_ta': guvenli_int(dep_v.get('S3', 0)),
-        'dep_da': guvenli_int(dep_v.get('S4', 0)),
-        'dep_gol': guvenli_int(dep_v.get('SC', 0))
-    }
+    """
+    🛡️ Veri çıkarma (Koruma katmanlı)
+    
+    Veri koruma katmanını kullanarak güvenli veri çıkarımı yapar.
+    Fallback olarak eski yöntemi kullanır.
+    """
+    sonuc = veri_koruma.veri_cikart_guvenli(ev_v, dep_v)
+    
+    if sonuc is None:
+        # Fallback: Eski yöntem
+        logger.warning("⚠️ Veri koruma katmanı başarısız, fallback kullanılıyor")
+        return {
+            'ev_sot': guvenli_int(ev_v.get('S1', 0)),
+            'ev_korner': guvenli_int(ev_v.get('S2', 0)),
+            'ev_ta': guvenli_int(ev_v.get('S3', 0)),
+            'ev_da': guvenli_int(ev_v.get('S4', 0)),
+            'ev_gol': guvenli_int(ev_v.get('SC', 0)),
+            'dep_sot': guvenli_int(dep_v.get('S1', 0)),
+            'dep_korner': guvenli_int(dep_v.get('S2', 0)),
+            'dep_ta': guvenli_int(dep_v.get('S3', 0)),
+            'dep_da': guvenli_int(dep_v.get('S4', 0)),
+            'dep_gol': guvenli_int(dep_v.get('SC', 0))
+        }
+    
+    return sonuc
 
 # ============================================================================
 # ⭐⭐⭐ ANA ANALİZ MOTORU (Literatür Bazlı)
@@ -263,12 +346,15 @@ def veri_cikart(ev_v, dep_v):
 
 async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session):
     """
-    Kantitatif analiz motoru:
+    Kantitatif analiz motoru (V44 - Faz 1):
     1. Altın pencere kontrolü (55-60 dakika)
     2. Skor durumu kontrolü (kaos/rölanti)
     3. SOT epilasyon kontrolü
     4. Fiziksel hiyerarşi kontrolü
-    5. Gemini AI analizi
+    5. ⭐ YENİ: Oyun durumu normalizasyonu
+    6. ⭐ YENİ: Korner tuzağı kontrolü
+    7. ⭐ YENİ: Çok katmanlı doğrulama
+    8. Gemini AI analizi
     """
     try:
         logger.info(f"🔍 Analiz: {ev_adi} vs {dep_adi} - {dk}'")
@@ -301,53 +387,94 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session):
             logger.debug(f"⏱️ Dakika aralık dışı: {dk}")
             return None
         
-        # 3. Fiziksel hiyerarşi kontrolü
+        # 3. ⭐ YENİ: Oyun Durumu Normalizasyonu
+        ev_da_norm, ev_sot_norm, dep_da_norm, dep_sot_norm = oyun_durumu_normalizasyonu(
+            ev_gol, dep_gol, v['ev_da'], v['dep_da'], v['ev_sot'], v['dep_sot'], dk
+        )
+        logger.info(f"🔄 Normalizasyon: Ev DA:{v['ev_da']}→{ev_da_norm}, Dep DA:{v['dep_da']}→{dep_da_norm}")
+        
+        # Normalize edilmiş değerleri kullan
+        da_norm = ev_da_norm + dep_da_norm
+        sot_norm = ev_sot_norm + dep_sot_norm
+        
+        # 4. ⭐ YENİ: Korner Tuzağı Kontrolü (S2 verisi varsa)
+        ev_korner = v.get('ev_korner', 0)
+        dep_korner = v.get('dep_korner', 0)
+        if ev_korner > 0 or dep_korner > 0:
+            if not korner_tuzagi_kontrolu(ev_korner, dep_korner, v['ev_sot'], v['dep_sot']):
+                logger.warning(f"❌ Korner tuzağı tespit edildi")
+                return None
+        
+        # 5. Fiziksel hiyerarşi kontrolü
         if ta < da or da < sot or ta < sot:
             logger.warning(f"❌ Fiziksel hiyerarşi ihlali: TA:{ta}, DA:{da}, SOT:{sot}")
             return None
         
-        # 4. Gol vs SOT kontrolü
+        # 6. Gol vs SOT kontrolü
         if sot < toplam_gol:
             logger.warning(f"❌ SOT < Gol: {sot} < {toplam_gol}")
             return None
         
-        # 5. Dakika başı şut limiti
+        # 7. Dakika başı şut limiti
         if dk > 0 and sot > (dk * 0.7):
             logger.warning(f"❌ SOT limiti aşıldı: {sot} > {dk * 0.7}")
             return None
         
         # ----------------------------------------------------------------
-        # ⭐⭐⭐ PUANLAMA SİSTEMİ (Literatür Bazlı)
+        # ⭐⭐⭐ PUANLAMA SİSTEMİ (Literatür Bazlı + Normalizasyon)
         # ----------------------------------------------------------------
         puan = 4.0
         
         # Altın pencere bonusu
-        zaman_bonusu = altin_pencere_kontrol(dk)
+        zaman_bonusu, zaman_tipi = altin_pencere_kontrol(dk)
         puan += zaman_bonusu
         if zaman_bonusu > 0:
-            logger.info(f"⭐ Altın pencere bonusu: +{zaman_bonusu}")
+            logger.info(f"⭐ Altın pencere bonusu: +{zaman_bonusu} ({zaman_tipi})")
         
         # Skor durumu bonusu
         if skor_durum == "OPTIMUM":
             puan += 3.0
             logger.info(f"🎯 Optimum skor bonusu: +3.0")
         
-        # SOT puanı (epilasyon kontrolü ile)
-        sot_puan = sot_epilasyon_kontrol(sot)
+        # SOT puanı (epilasyon kontrolü ile) - Normalize edilmiş değer kullan
+        sot_puan = sot_epilasyon_kontrol(sot_norm)
         puan += sot_puan
-        logger.info(f"🎯 SOT puanı: {sot_puan} (SOT: {sot})")
+        logger.info(f"🎯 SOT puanı: {sot_puan} (SOT norm: {sot_norm})")
         
-        # DA bonusu (her 10 DA için 0.5 puan, max 3.0)
-        da_bonus = min((da // 10) * 0.5, 3.0)
+        # DA bonusu (her 10 DA için 0.5 puan, max 3.0) - Normalize edilmiş değer kullan
+        da_bonus = min((da_norm // 10) * 0.5, 3.0)
         puan += da_bonus
-        logger.info(f"📊 DA bonusu: +{da_bonus} (DA: {da})")
+        logger.info(f"📊 DA bonusu: +{da_bonus} (DA norm: {da_norm})")
         
         logger.info(f"💯 Toplam puan: {round(puan, 1)}")
         
         # ----------------------------------------------------------------
-        # SİNYAL OLUŞTURMA (Puan >= 7.0)
+        # ⭐ YENİ: ÇOK KATMANLI DOĞRULAMA
         # ----------------------------------------------------------------
-        if puan >= 7.0:
+        dogrulama = CokKatmanliDogrulama()
+        
+        # VU (Veri Uygunluğu): Tüm kritik filtrelerden geçtiyse 1
+        dogrulama.VU = 1
+        
+        # VA (Veri Anomalisi): Normalize edilmiş değerler orijinalden çok farklıysa 1
+        if abs(da - da_norm) > (da * 0.3) or abs(sot - sot_norm) > (sot * 0.3):
+            dogrulama.VA = 1
+            logger.info(f"⚠️ Veri anomalisi tespit edildi (normalizasyon farkı yüksek)")
+        
+        # USA (Uzun Süreli Anomali): 80+ dakika ve anomali varsa 1
+        if dk >= 80 and dogrulama.VA == 1:
+            dogrulama.USA = 1
+            logger.info(f"⚠️ Uzun süreli anomali tespit edildi")
+        
+        # Çok katmanlı doğrulama kontrolü
+        if not dogrulama.sinyal_uret():
+            logger.warning(f"❌ Çok katmanlı doğrulama başarısız")
+            return None
+        
+        # ----------------------------------------------------------------
+        # SİNYAL OLUŞTURMA (Puan >= 9.0) ⭐ YENİ EŞIK
+        # ----------------------------------------------------------------
+        if puan >= 9.0:
             # Gemini AI analizi
             mac_verisi = {
                 'ev_adi': ev_adi,
@@ -405,7 +532,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session):
             logger.info(f"✅ SİNYAL OLUŞTURULDU (AI: {'✅' if ai_analiz else '❌'})")
             return mesaj
         else:
-            logger.info(f"📉 Puan yetersiz: {round(puan, 1)} < 7.0")
+            logger.info(f"📉 Puan yetersiz: {round(puan, 1)} < 9.0")
             return None
             
     except Exception as e:
@@ -478,15 +605,23 @@ async def ana_dongu():
         await bot.send_message(
             chat_id=CHAT_ID,
             text=(
-                "🚀 **BOT V44 LİTERATÜR PRO**\n\n"
+                "🚀 **BOT V44 LİTERATÜR PRO - VERİ KORUMALI**\n\n"
                 "🎯 **Yeni Özellikler:**\n"
                 "• ✅ Regex Filtreler: U19/Reserves/E-spor güçlü tespit\n"
                 "• ✅ Altın Pencere: 24-36 dk (İlk yarı) + 48-58 dk (İkinci yarı)\n"
                 "• ✅ Sezgisel Gemini AI: Kontra atak riski, 'ama' diyebilen\n"
                 "• ✅ Kaos/Rölanti Filtreleri: Toplam gol < 5, Fark < 3\n"
-                "• ✅ SOT Kontrolü: SOT <= 8\n\n"
+                "• ✅ SOT Kontrolü: SOT <= 8\n"
+                "• ⭐ YENİ: Oyun Durumu Normalizasyonu (skor farkı bazlı)\n"
+                "• ⭐ YENİ: Korner Tuzağı Kontrolü (sahte baskı tespiti)\n"
+                "• ⭐ YENİ: Çok Katmanlı Doğrulama (VU/VA/USA)\n"
+                "• 🛡️ YENİ: Veri Koruma Katmanı (S-kod dinamik tespit)\n"
+                "• 🛡️ YENİ: Fiziksel Hiyerarşi Doğrulama (TA>=DA>=SOT>=Gol)\n"
+                "• 🛡️ YENİ: Akıllı S-kod Adaptasyonu\n\n"
                 "📊 **Hedef Başarı:** %85-90\n"
+                "🎯 **Minimum Eşik:** 9.0 (7.0'dan yükseltildi)\n"
                 "🤖 **AI:** Temperature 0.9 (Yaratıcı)\n"
+                "🛡️ **Veri Koruma:** Aktif\n"
                 "✅ Tüm güvenlik kontrolleri aktif"
             )
         )
@@ -543,6 +678,10 @@ async def ana_dongu():
                 logger.info(f"✅ Döngü #{dongu_sayaci} tamamlandı")
                 logger.info(f"🤖 Gemini AI çağrı sayısı: {gemini_ai.api_call_count}")
                 
+                # Veri koruma istatistikleri (her 10 döngüde bir)
+                if dongu_sayaci % 10 == 0:
+                    veri_koruma.istatistikleri_goster()
+                
             except Exception as e:
                 logger.error(f"❌ Ana döngü hatası: {str(e)}")
                 import traceback
@@ -566,4 +705,3 @@ if __name__ == "__main__":
         logger.error(f"❌ Kritik hata: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
-
