@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Detaylı Stats Kontrol Scripti
-BetsAPI'den gelen verilerde hangi istatistiklerin olduğunu kontrol eder
+Tam API Response Kontrolü
+BetsAPI'den gelen tüm verileri gösterir (Asian Handicap, Odds, Stats vb.)
 """
 
 import os
@@ -15,15 +15,14 @@ BETSAPI_TOKEN = os.getenv('BETSAPI_TOKEN', '')
 
 if not BETSAPI_TOKEN:
     print("❌ HATA: BETSAPI_TOKEN environment variable tanımlı değil!")
-    print("   Kullanım: set BETSAPI_TOKEN=your_token")
     exit(1)
 
-print("=" * 70)
-print("🔍 DETAYLI STATS KONTROL SCRIPTI")
-print("=" * 70)
+print("=" * 80)
+print("🔍 TAM API RESPONSE KONTROLÜ")
+print("=" * 80)
 print(f"Token: {BETSAPI_TOKEN[:10]}...{BETSAPI_TOKEN[-5:]}")
 print(f"⏰ Zaman: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-print("=" * 70)
+print("=" * 80)
 print()
 
 # 1. Inplay maçlarını çek
@@ -35,7 +34,6 @@ try:
     
     if response.status_code != 200:
         print(f"❌ HTTP {response.status_code}")
-        print(f"Response: {response.text[:200]}")
         exit(1)
     
     data = response.json()
@@ -52,130 +50,151 @@ except Exception as e:
     print(f"❌ Hata: {e}")
     exit(1)
 
-# 2. İlk 3 maçın detayını çek ve stats'ları kontrol et
-print("=" * 70)
-print("📊 Step 2: Maç detayları ve stats kontrolü")
-print("=" * 70)
-print()
-
-stats_found = 0
-stats_types = {}
-
-for i, match in enumerate(matches[:5], 1):
-    match_id = match.get('id')
-    home_team = match.get('home', {}).get('name', 'N/A')
-    away_team = match.get('away', {}).get('name', 'N/A')
+# 2. İlk maçın FULL detayını göster
+if matches:
+    first_match = matches[0]
+    match_id = first_match.get('id')
+    home_team = first_match.get('home', {}).get('name', 'N/A')
+    away_team = first_match.get('away', {}).get('name', 'N/A')
     
-    print(f"🏆 Maç #{i}: {home_team} vs {away_team}")
-    print(f"   ID: {match_id}")
+    print("=" * 80)
+    print(f"🏆 İLK MAÇ DETAYI")
+    print("=" * 80)
+    print(f"Maç: {home_team} vs {away_team}")
+    print(f"ID: {match_id}")
+    print()
     
     # Event detay çek
+    print("📡 Event detay API çağrısı yapılıyor...")
     event_url = f"https://api.betsapi.com/v1/event/view?token={BETSAPI_TOKEN}&event_id={match_id}"
     
     try:
         event_response = requests.get(event_url, timeout=10)
         
         if event_response.status_code != 200:
-            print(f"   ❌ HTTP {event_response.status_code}")
-            print()
-            continue
+            print(f"❌ HTTP {event_response.status_code}")
+            exit(1)
         
         event_data = event_response.json()
         
         if not event_data.get('success'):
-            print(f"   ❌ API Hatası: {event_data.get('error')}")
-            print()
-            continue
+            print(f"❌ API Hatası: {event_data.get('error')}")
+            exit(1)
         
         results = event_data.get('results', [])
         if not results:
-            print(f"   ⚠️ Results boş")
-            print()
-            continue
+            print(f"❌ Results boş")
+            exit(1)
         
         event_info = results[0]
-        stats = event_info.get('stats', {})
         
-        if stats:
-            stats_found += 1
-            print(f"   ✅ Stats bulundu!")
-            print(f"   📊 Stats içeriği:")
-            
-            # Stats yapısını analiz et
-            for key, value in stats.items():
-                print(f"      • {key}: {value}")
-                
-                # Stats tiplerini say
-                if key not in stats_types:
-                    stats_types[key] = 0
-                stats_types[key] += 1
-            
-            # Özel alanları kontrol et
-            print()
-            print(f"   🔍 Özel Alan Kontrolü:")
-            
-            # Korner
-            corners_home = stats.get('corners', {}).get('home', 0) if isinstance(stats.get('corners'), dict) else 0
-            corners_away = stats.get('corners', {}).get('away', 0) if isinstance(stats.get('corners'), dict) else 0
-            print(f"      🚩 Korner: Ev {corners_home} - Dep {corners_away}")
-            
-            # Kartlar
-            yellow_home = stats.get('yellowcards', {}).get('home', 0) if isinstance(stats.get('yellowcards'), dict) else 0
-            yellow_away = stats.get('yellowcards', {}).get('away', 0) if isinstance(stats.get('yellowcards'), dict) else 0
-            print(f"      🟨 Sarı Kart: Ev {yellow_home} - Dep {yellow_away}")
-            
-            red_home = stats.get('redcards', {}).get('home', 0) if isinstance(stats.get('redcards'), dict) else 0
-            red_away = stats.get('redcards', {}).get('away', 0) if isinstance(stats.get('redcards'), dict) else 0
-            print(f"      🟥 Kırmızı Kart: Ev {red_home} - Dep {red_away}")
-            
-            # Ataklar
-            attacks_home = stats.get('attacks', {}).get('home', 0) if isinstance(stats.get('attacks'), dict) else 0
-            attacks_away = stats.get('attacks', {}).get('away', 0) if isinstance(stats.get('attacks'), dict) else 0
-            print(f"      ⚔️ Atak: Ev {attacks_home} - Dep {attacks_away}")
-            
-            # Tehlikeli Ataklar
-            dangerous_home = stats.get('dangerous_attacks', {}).get('home', 0) if isinstance(stats.get('dangerous_attacks'), dict) else 0
-            dangerous_away = stats.get('dangerous_attacks', {}).get('away', 0) if isinstance(stats.get('dangerous_attacks'), dict) else 0
-            print(f"      🔥 Tehlikeli Atak: Ev {dangerous_home} - Dep {dangerous_away}")
-            
-            # Şutlar
-            shots_home = stats.get('shots_on_target', {}).get('home', 0) if isinstance(stats.get('shots_on_target'), dict) else 0
-            shots_away = stats.get('shots_on_target', {}).get('away', 0) if isinstance(stats.get('shots_on_target'), dict) else 0
-            print(f"      🎯 İsabetli Şut: Ev {shots_home} - Dep {shots_away}")
-            
-        else:
-            print(f"   ❌ Stats yok")
+        # Tam response'u JSON dosyasına kaydet
+        with open('full_api_response.json', 'w', encoding='utf-8') as f:
+            json.dump(event_info, f, indent=2, ensure_ascii=False)
+        
+        print("✅ Tam response 'full_api_response.json' dosyasına kaydedildi")
+        print()
+        
+        # Ana alanları göster
+        print("=" * 80)
+        print("📋 ANA ALANLAR")
+        print("=" * 80)
+        
+        for key in event_info.keys():
+            print(f"  • {key}")
         
         print()
+        
+        # Stats detayı
+        print("=" * 80)
+        print("📊 STATS DETAYI")
+        print("=" * 80)
+        
+        stats = event_info.get('stats', {})
+        if stats:
+            print(f"Stats tipi: {type(stats)}")
+            print(f"Stats keys: {list(stats.keys())}")
+            print()
+            
+            for key, value in stats.items():
+                print(f"  • {key}: {value} (tip: {type(value).__name__})")
+        else:
+            print("❌ Stats yok")
+        
+        print()
+        
+        # Odds/Bahis bilgileri
+        print("=" * 80)
+        print("💰 ODDS/BAHİS BİLGİLERİ")
+        print("=" * 80)
+        
+        # Asian Handicap kontrolü
+        asian_handicap_keys = [k for k in event_info.keys() if 'asian' in k.lower() or 'handicap' in k.lower()]
+        if asian_handicap_keys:
+            print("✅ Asian Handicap alanları bulundu:")
+            for key in asian_handicap_keys:
+                print(f"  • {key}: {event_info.get(key)}")
+        else:
+            print("❌ Asian Handicap alanı bulunamadı")
+        
+        print()
+        
+        # Odds kontrolü
+        odds_keys = [k for k in event_info.keys() if 'odd' in k.lower() or 'bet' in k.lower()]
+        if odds_keys:
+            print("✅ Odds alanları bulundu:")
+            for key in odds_keys:
+                value = event_info.get(key)
+                if isinstance(value, dict):
+                    print(f"  • {key}: {len(value)} item")
+                else:
+                    print(f"  • {key}: {value}")
+        else:
+            print("❌ Odds alanı bulunamadı")
+        
+        print()
+        
+        # Skor ve timer
+        print("=" * 80)
+        print("⚽ SKOR VE SÜRE BİLGİLERİ")
+        print("=" * 80)
+        
+        print(f"  • ss (skor): {event_info.get('ss')}")
+        print(f"  • scores: {event_info.get('scores')}")
+        print(f"  • timer: {event_info.get('timer')}")
+        print(f"  • time_status: {event_info.get('time_status')}")
+        
+        print()
+        
+        # Takım bilgileri
+        print("=" * 80)
+        print("👥 TAKIM BİLGİLERİ")
+        print("=" * 80)
+        
+        home = event_info.get('home', {})
+        away = event_info.get('away', {})
+        
+        print(f"Ev Sahibi:")
+        for key, value in home.items():
+            print(f"  • {key}: {value}")
+        
+        print()
+        print(f"Deplasman:")
+        for key, value in away.items():
+            print(f"  • {key}: {value}")
+        
+        print()
+        print("=" * 80)
+        print("✅ Kontrol tamamlandı")
+        print("=" * 80)
+        print()
+        print("💡 Detaylı inceleme için 'full_api_response.json' dosyasını açın")
         
     except Exception as e:
-        print(f"   ❌ Hata: {e}")
-        print()
-        continue
+        print(f"❌ Hata: {e}")
+        import traceback
+        traceback.print_exc()
+        exit(1)
 
-# 3. Özet
-print("=" * 70)
-print("📊 ÖZET")
-print("=" * 70)
-print(f"✅ Stats bulunan maç sayısı: {stats_found}/{min(5, len(matches))}")
-print()
-
-if stats_types:
-    print("📋 Bulunan Stats Tipleri:")
-    for stat_type, count in sorted(stats_types.items()):
-        print(f"   • {stat_type}: {count} maçta bulundu")
 else:
-    print("❌ Hiçbir maçta stats verisi bulunamadı!")
-    print()
-    print("💡 Olası Sebepler:")
-    print("   1. Maçlar henüz başlamadı (stats sadece canlı maçlarda)")
-    print("   2. Düşük seviye ligler (stats sadece büyük liglerde)")
-    print("   3. API subscription stats içermiyor")
-    print()
-    print("📧 BetsAPI müşteri hizmetlerine sorun:")
-    print("   'Which leagues have detailed statistics (corners, cards, attacks)?'")
-
-print()
-print("=" * 70)
-print("✅ Kontrol tamamlandı")
-print("=" * 70)
+    print("❌ Canlı maç bulunamadı")
