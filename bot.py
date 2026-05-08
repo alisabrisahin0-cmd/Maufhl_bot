@@ -1,7 +1,221 @@
 import asyncio, aiohttp, os, urllib.parse, logging, re, time
 from telegram import Bot
 from collections import deque
-from veri_koruma_katmani import VeriKorumaKatmani
+
+# ============================================================================
+# 🛡️ VERİ KORUMA KATMANI (Data Protection Layer) - EMBEDDED
+# ============================================================================
+
+def guvenli_int(deger, varsayilan=0):
+    """Güvenli integer dönüşümü"""
+    try:
+        if deger == '' or deger is None:
+            return varsayilan
+        return int(deger)
+    except:
+        return varsayilan
+
+class VeriKorumaKatmani:
+    """
+    🛡️ Veri Koruma Katmanı
+    
+    S-kodlarını dinamik tespit eder ve fiziksel hiyerarşiyi doğrular
+    """
+    
+    def __init__(self):
+        self.s_kod_mapping = {
+            'S1': 'SOT',
+            'S2': 'Korner',
+            'S3': 'TA',
+            'S4': 'DA',
+            'SC': 'Gol'
+        }
+        self.anomali_sayaci = 0
+        self.toplam_kontrol = 0
+    
+    def s_kodlari_tespit_et(self, ev_v, dep_v):
+        """S-kodlarını dinamik olarak tespit eder"""
+        s_kodlari = {}
+        
+        # Tüm S-kodlarını topla
+        for key in list(ev_v.keys()) + list(dep_v.keys()):
+            if key.startswith('S'):
+                if key not in s_kodlari:
+                    ev_val = guvenli_int(ev_v.get(key, 0))
+                    dep_val = guvenli_int(dep_v.get(key, 0))
+                    s_kodlari[key] = {
+                        'ev': ev_val,
+                        'dep': dep_val,
+                        'toplam': ev_val + dep_val
+                    }
+        
+        return s_kodlari
+    
+    def fiziksel_hiyerarsi_dogrula(self, ta, da, sot, gol):
+        """
+        Fiziksel hiyerarşi: TA >= DA >= SOT >= Gol
+        
+        Returns:
+            (bool, list): (Geçerli mi?, Hata mesajları)
+        """
+        hatalar = []
+        
+        if ta < da:
+            hatalar.append(f"TA ({ta}) < DA ({da})")
+        if da < sot:
+            hatalar.append(f"DA ({da}) < SOT ({sot})")
+        if sot < gol:
+            hatalar.append(f"SOT ({sot}) < Gol ({gol})")
+        if ta < sot:
+            hatalar.append(f"TA ({ta}) < SOT ({sot})")
+        
+        return len(hatalar) == 0, hatalar
+    
+    def veri_yapisini_kontrol_et(self, s_kodlari):
+        """Veri yapısının değişip değişmediğini kontrol eder"""
+        beklenen_kodlar = {'S1', 'S2', 'S3', 'S4', 'SC'}
+        mevcut_kodlar = set(s_kodlari.keys())
+        
+        eksik_kodlar = beklenen_kodlar - mevcut_kodlar
+        fazla_kodlar = mevcut_kodlar - beklenen_kodlar
+        
+        if eksik_kodlar or fazla_kodlar:
+            logger.warning(f"⚠️ Veri yapısı değişikliği tespit edildi!")
+            if eksik_kodlar:
+                logger.warning(f"   Eksik kodlar: {eksik_kodlar}")
+            if fazla_kodlar:
+                logger.warning(f"   Yeni kodlar: {fazla_kodlar}")
+            return False
+        
+        return True
+    
+    def akilli_s_kod_tespiti(self, s_kodlari):
+        """
+        S-kodlarını değerlerine göre akıllıca tespit eder
+        
+        Mantık:
+        - En yüksek değer: TA (Toplam Atak)
+        - İkinci yüksek: DA (Tehlikeli Atak)
+        - Üçüncü: SOT veya Korner (değere göre)
+        - En düşük: Gol
+        """
+        # SC'yi ayır (her zaman Gol)
+        gol_kod = 'SC'
+        gol_deger = s_kodlari.get(gol_kod, {}).get('toplam', 0)
+        
+        # Diğer S-kodlarını değere göre sırala
+        diger_kodlar = {k: v['toplam'] for k, v in s_kodlari.items() if k != gol_kod}
+        sirali_kodlar = sorted(diger_kodlar.items(), key=lambda x: x[1], reverse=True)
+        
+        if len(sirali_kodlar) >= 4:
+            # En yüksek 4 değeri al
+            ta_kod = sirali_kodlar[0][0]  # En yüksek = TA
+            da_kod = sirali_kodlar[1][0]  # İkinci = DA
+            
+            # SOT ve Korner'i değere göre belirle
+            # Genellikle SOT > Korner olur
+            if sirali_kodlar[2][1] > sirali_kodlar[3][1]:
+                sot_kod = sirali_kodlar[2][0]
+                korner_kod = sirali_kodlar[3][0]
+            else:
+                sot_kod = sirali_kodlar[3][0]
+                korner_kod = sirali_kodlar[2][0]
+            
+            yeni_mapping = {
+                ta_kod: 'TA',
+                da_kod: 'DA',
+                sot_kod: 'SOT',
+                korner_kod: 'Korner',
+                gol_kod: 'Gol'
+            }
+            
+            logger.info(f"🔍 Akıllı S-kod tespiti:")
+            for kod, anlam in yeni_mapping.items():
+                deger = s_kodlari.get(kod, {}).get('toplam', 0)
+                logger.info(f"   {kod} = {anlam} (değer: {deger})")
+            
+            return yeni_mapping
+        
+        # Varsayılan mapping'i döndür
+        return self.s_kod_mapping
+    
+    def veri_cikart_guvenli(self, ev_v, dep_v):
+        """
+        🛡️ Güvenli veri çıkarma (Koruma katmanlı)
+        
+        1. S-kodlarını tespit et
+        2. Veri yapısını kontrol et
+        3. Gerekirse akıllı tespit yap
+        4. Fiziksel hiyerarşiyi doğrula
+        5. Veriyi döndür
+        """
+        self.toplam_kontrol += 1
+        
+        # 1. S-kodlarını tespit et
+        s_kodlari = self.s_kodlari_tespit_et(ev_v, dep_v)
+        
+        if not s_kodlari:
+            logger.error("❌ S-kodları bulunamadı!")
+            return None
+        
+        # 2. Veri yapısını kontrol et
+        yapi_ok = self.veri_yapisini_kontrol_et(s_kodlari)
+        
+        # 3. Mapping'i belirle
+        if not yapi_ok:
+            logger.warning("⚠️ Veri yapısı standart değil, akıllı tespit yapılıyor...")
+            mapping = self.akilli_s_kod_tespiti(s_kodlari)
+        else:
+            mapping = self.s_kod_mapping
+        
+        # 4. Ters mapping oluştur (TA -> S3 gibi)
+        ters_mapping = {v: k for k, v in mapping.items()}
+        
+        # 5. Veriyi çıkar
+        veri = {
+            'ev_sot': guvenli_int(ev_v.get(ters_mapping.get('SOT', 'S1'), 0)),
+            'ev_korner': guvenli_int(ev_v.get(ters_mapping.get('Korner', 'S2'), 0)),
+            'ev_ta': guvenli_int(ev_v.get(ters_mapping.get('TA', 'S3'), 0)),
+            'ev_da': guvenli_int(ev_v.get(ters_mapping.get('DA', 'S4'), 0)),
+            'ev_gol': guvenli_int(ev_v.get(ters_mapping.get('Gol', 'SC'), 0)),
+            'dep_sot': guvenli_int(dep_v.get(ters_mapping.get('SOT', 'S1'), 0)),
+            'dep_korner': guvenli_int(dep_v.get(ters_mapping.get('Korner', 'S2'), 0)),
+            'dep_ta': guvenli_int(dep_v.get(ters_mapping.get('TA', 'S3'), 0)),
+            'dep_da': guvenli_int(dep_v.get(ters_mapping.get('DA', 'S4'), 0)),
+            'dep_gol': guvenli_int(dep_v.get(ters_mapping.get('Gol', 'SC'), 0))
+        }
+        
+        # 6. Fiziksel hiyerarşiyi doğrula
+        ta = veri['ev_ta'] + veri['dep_ta']
+        da = veri['ev_da'] + veri['dep_da']
+        sot = veri['ev_sot'] + veri['dep_sot']
+        gol = veri['ev_gol'] + veri['dep_gol']
+        
+        hiyerarsi_ok, hatalar = self.fiziksel_hiyerarsi_dogrula(ta, da, sot, gol)
+        
+        if not hiyerarsi_ok:
+            self.anomali_sayaci += 1
+            logger.warning(f"⚠️ Fiziksel hiyerarşi ihlali tespit edildi:")
+            for hata in hatalar:
+                logger.warning(f"   {hata}")
+            logger.warning(f"📊 Anomali oranı: {self.anomali_sayaci}/{self.toplam_kontrol} ({(self.anomali_sayaci/self.toplam_kontrol)*100:.1f}%)")
+        
+        # 7. Veriyi döndür (hiyerarşi ihlali olsa bile, üst katman karar verecek)
+        veri['hiyerarsi_ok'] = hiyerarsi_ok
+        veri['hatalar'] = hatalar
+        veri['s_kodlari'] = s_kodlari
+        veri['mapping'] = mapping
+        
+        return veri
+    
+    def istatistikleri_goster(self):
+        """Veri koruma katmanı istatistiklerini gösterir"""
+        if self.toplam_kontrol > 0:
+            basari_orani = ((self.toplam_kontrol - self.anomali_sayaci) / self.toplam_kontrol) * 100
+            logger.info(f"📊 Veri Koruma İstatistikleri:")
+            logger.info(f"   Toplam kontrol: {self.toplam_kontrol}")
+            logger.info(f"   Anomali: {self.anomali_sayaci}")
+            logger.info(f"   Başarı oranı: {basari_orani:.1f}%")
 
 # ============================================================================
 # KONFIGÜRASYON
@@ -304,14 +518,6 @@ def esnek_liste_duzelt(veri):
     elif isinstance(veri, dict): 
         duz.append(veri)
     return duz
-
-def guvenli_int(deger, varsayilan=0):
-    try:
-        if deger == '' or deger is None:
-            return varsayilan
-        return int(deger)
-    except:
-        return varsayilan
 
 def veri_cikart(ev_v, dep_v):
     """
