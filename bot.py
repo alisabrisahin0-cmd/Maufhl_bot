@@ -919,8 +919,8 @@ async def ana_dongu():
                 import traceback
                 logger.error(traceback.format_exc())
             
-            logger.info("⏳ 60 saniye bekleniyor...\n")
-            await asyncio.sleep(60)
+            logger.info("⏳ 300 saniye bekleniyor...\n")
+            await asyncio.sleep(300)
 
 if __name__ == "__main__":
     logger.info("🚀 V41.0 Final Bot Başlatılıyor...")
