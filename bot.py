@@ -560,11 +560,15 @@ class GeminiAIAnalyzer:
     
     async def analiz_yap(self, mac_verisi, session):
         if not self.api_keys:
+            logger.warning("🐛 Gemini AI: API keys yok!")
             return None
         
         try:
             api_key = self._get_next_api_key()
             self.api_call_count += 1
+            
+            logger.info(f"🐛 Gemini AI: API çağrısı #{self.api_call_count}")
+            logger.info(f"🐛 Gemini AI: Key index {self.current_key_index-1}/{len(self.api_keys)}")
             
             prompt = f"""Sen deneyimli bir futbol analisti ve bahis uzmanısın.
 İstatistiklerin ÖTESİNDE, sezgisel ve bağlamsal analiz yap.
@@ -600,17 +604,29 @@ DOĞAL dille yaz. İnsan gibi düşün, makine gibi değil."""
                 }
             }
             
+            logger.info(f"🐛 Gemini AI: POST isteği gönderiliyor...")
+            
             async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                logger.info(f"🐛 Gemini AI: Response status: {response.status}")
+                
                 if response.status != 200:
+                    response_text = await response.text()
                     logger.error(f"❌ Gemini API hatası: HTTP {response.status}")
+                    logger.error(f"   Response: {response_text[:200]}")
                     return None
                 
                 data = await response.json()
+                logger.info(f"🐛 Gemini AI: JSON parse başarılı")
+                logger.info(f"🐛 Gemini AI: Response keys: {list(data.keys())}")
                 
                 if 'candidates' in data and len(data['candidates']) > 0:
                     text = data['candidates'][0]['content']['parts'][0]['text']
-                    logger.info(f"🤖 Gemini AI yanıtı alındı")
+                    logger.info(f"✅ Gemini AI yanıtı alındı ({len(text)} karakter)")
+                    logger.info(f"   İlk 100 karakter: {text[:100]}")
                     return text
+                else:
+                    logger.warning(f"⚠️ Gemini AI: 'candidates' yok veya boş")
+                    logger.warning(f"   Data: {str(data)[:200]}")
                 
                 return None
                 
@@ -638,46 +654,59 @@ async def asian_handicap_cek(event_id, session):
         None: Hata durumunda
     """
     try:
-        logger.debug(f"📡 Asian Handicap API çağrısı (event_id: {event_id})...")
+        logger.info(f"🐛 Asian Handicap: API çağrısı başlıyor (event_id: {event_id})")
         
         async with session.get(
             f"https://api.betsapi.com/v1/event/odds?token={BETSAPI_TOKEN}&event_id={event_id}",
             timeout=aiohttp.ClientTimeout(total=10)
         ) as response:
             
+            logger.info(f"🐛 Asian Handicap: Response status: {response.status}")
+            
             # Response validation
             if response.status != 200:
+                response_text = await response.text()
                 logger.warning(f"⚠️ Asian Handicap API hatası: HTTP {response.status}")
+                logger.warning(f"   Response: {response_text[:200]}")
                 return None
             
             # JSON parse validation
             try:
                 data = await response.json()
+                logger.info(f"🐛 Asian Handicap: JSON parse başarılı")
             except Exception as e:
                 logger.error(f"❌ Asian Handicap JSON parse hatası: {str(e)}")
                 return None
             
             # Success kontrolü
+            logger.info(f"🐛 Asian Handicap: success = {data.get('success')}")
             if data.get('success') != 1:
-                logger.debug(f"⚠️ Asian Handicap API success=0")
+                logger.warning(f"⚠️ Asian Handicap API success=0")
+                logger.warning(f"   Data keys: {list(data.keys())}")
                 return None
             
             # Results validation
             results = data.get('results', {})
+            logger.info(f"🐛 Asian Handicap: results type = {type(results)}")
             if not isinstance(results, dict):
-                logger.debug(f"⚠️ Asian Handicap results geçersiz")
+                logger.warning(f"⚠️ Asian Handicap results geçersiz (dict değil)")
                 return None
             
             # Odds validation
             odds = results.get('odds', {})
+            logger.info(f"🐛 Asian Handicap: odds type = {type(odds)}")
+            logger.info(f"🐛 Asian Handicap: odds keys = {list(odds.keys()) if isinstance(odds, dict) else 'N/A'}")
             if not isinstance(odds, dict):
-                logger.debug(f"⚠️ Asian Handicap odds geçersiz")
+                logger.warning(f"⚠️ Asian Handicap odds geçersiz (dict değil)")
                 return None
             
             # Asian Handicap (1_2) arama
             asian_handicap = odds.get('1_2', {})
+            logger.info(f"🐛 Asian Handicap: 1_2 type = {type(asian_handicap)}")
+            logger.info(f"🐛 Asian Handicap: 1_2 keys = {list(asian_handicap.keys()) if isinstance(asian_handicap, dict) else 'N/A'}")
             if not isinstance(asian_handicap, dict):
-                logger.debug(f"⚠️ Asian Handicap (1_2) bulunamadı")
+                logger.warning(f"⚠️ Asian Handicap (1_2) bulunamadı veya dict değil")
+                logger.warning(f"   Mevcut odds keys: {list(odds.keys())}")
                 return None
             
             # Handikap değerlerini çek
@@ -686,11 +715,15 @@ async def asian_handicap_cek(event_id, session):
             ev_oran = guvenli_float(asian_handicap.get('home_odds', 0))
             dep_oran = guvenli_float(asian_handicap.get('away_odds', 0))
             
+            logger.info(f"🐛 Asian Handicap: Değerler parse edildi")
+            logger.info(f"   ev_handicap: {ev_handicap}, dep_handicap: {dep_handicap}")
+            logger.info(f"   ev_oran: {ev_oran}, dep_oran: {dep_oran}")
+            
             if ev_handicap == 0 and dep_handicap == 0:
-                logger.debug(f"⚠️ Asian Handicap değerleri sıfır")
+                logger.warning(f"⚠️ Asian Handicap değerleri sıfır")
                 return None
             
-            logger.info(f"✅ Asian Handicap: Ev {ev_handicap} ({ev_oran}), Dep {dep_handicap} ({dep_oran})")
+            logger.info(f"✅ Asian Handicap başarılı: Ev {ev_handicap} ({ev_oran}), Dep {dep_handicap} ({dep_oran})")
             
             return {
                 'ev_handicap': ev_handicap,
@@ -926,25 +959,75 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
         # ----------------------------------------------------------------
         # ⭐ YENİ: ÇOK KATMANLI DOĞRULAMA (LİTERATÜR)
         # ----------------------------------------------------------------
+        logger.info(f"🐛 DEBUG - Çok Katmanlı Doğrulama Başlıyor")
         dogrulama = CokKatmanliDogrulama()
         
         # VU (Veri Uygunluğu): Tüm kritik filtrelerden geçtiyse 1
         dogrulama.VU = 1
+        logger.info(f"   ✓ VU (Veri Uygunluğu) = 1 (tüm filtrelerden geçti)")
+        
+        # ----------------------------------------------------------------
+        # 🐛 DEBUG: VA (Veri Anomalisi) Hesaplama
+        # ----------------------------------------------------------------
+        logger.info(f"🐛 DEBUG - VA (Veri Anomalisi) Hesaplama:")
+        logger.info(f"   📊 DA orijinal: {da}")
+        logger.info(f"   📊 DA normalize: {da_norm}")
+        logger.info(f"   📊 DA farkı: {abs(da - da_norm)}")
+        logger.info(f"   📊 DA eşik (%30): {da * 0.3}")
+        logger.info(f"   📊 SOT orijinal: {sot}")
+        logger.info(f"   📊 SOT normalize: {sot_norm}")
+        logger.info(f"   📊 SOT farkı: {abs(sot - sot_norm)}")
+        logger.info(f"   📊 SOT eşik (%30): {sot * 0.3}")
         
         # VA (Veri Anomalisi): Normalize edilmiş değerler orijinalden çok farklıysa 1
         if abs(da - da_norm) > (da * 0.3) or abs(sot - sot_norm) > (sot * 0.3):
             dogrulama.VA = 1
-            logger.info(f"⚠️ Veri anomalisi tespit edildi (normalizasyon farkı yüksek)")
+            logger.info(f"   ✓ VA = 1 (Veri anomalisi tespit edildi - normalizasyon farkı yüksek)")
+        else:
+            logger.info(f"   ✓ VA = 0 (Veri anomalisi yok - normalizasyon farkı düşük)")
+        
+        # ----------------------------------------------------------------
+        # 🐛 DEBUG: USA (Uzun Süreli Anomali) Hesaplama
+        # ----------------------------------------------------------------
+        logger.info(f"🐛 DEBUG - USA (Uzun Süreli Anomali) Hesaplama:")
+        logger.info(f"   📊 Dakika: {dk}")
+        logger.info(f"   📊 VA değeri: {dogrulama.VA}")
+        logger.info(f"   📊 Koşul: dk >= 80 AND VA == 1")
         
         # USA (Uzun Süreli Anomali): 80+ dakika ve anomali varsa 1
         if dk >= 80 and dogrulama.VA == 1:
             dogrulama.USA = 1
-            logger.info(f"⚠️ Uzun süreli anomali tespit edildi")
+            logger.info(f"   ✓ USA = 1 (Uzun süreli anomali tespit edildi)")
+        else:
+            logger.info(f"   ✓ USA = 0 (Uzun süreli anomali yok)")
+            if dk < 80:
+                logger.info(f"      Sebep: Dakika {dk} < 80")
+            if dogrulama.VA == 0:
+                logger.info(f"      Sebep: VA = 0 (anomali yok)")
+        
+        # ----------------------------------------------------------------
+        # 🐛 DEBUG: MA (Master Algoritma) Hesaplama
+        # ----------------------------------------------------------------
+        logger.info(f"🐛 DEBUG - MA (Master Algoritma) Hesaplama:")
+        logger.info(f"   📊 Toplam gol: {toplam_gol}")
+        logger.info(f"   📊 Gol farkı: {abs(ev_gol - dep_gol)}")
+        logger.info(f"   📊 Dakika: {dk}")
+        logger.info(f"   📊 Koşul 1: toplam_gol >= 4 AND dk >= 75")
+        logger.info(f"   📊 Koşul 2: gol_farki >= 3 AND dk >= 70")
+        logger.info(f"   📊 ma_aktif değeri: {ma_aktif}")
         
         # MA (Master Algoritma): Ekstrem koşul varsa 1
         if ma_aktif:
             dogrulama.MA = 1
-            logger.warning(f"⚠️ Master Algoritma aktif")
+            logger.info(f"   ✓ MA = 1 (Master Algoritma aktif - ekstrem koşul)")
+        else:
+            logger.info(f"   ✓ MA = 0 (Master Algoritma pasif - normal koşul)")
+        
+        # ----------------------------------------------------------------
+        # 🐛 DEBUG: Doğrulama Özeti
+        # ----------------------------------------------------------------
+        logger.info(f"🐛 DEBUG - Doğrulama Özeti:")
+        logger.info(f"   VU={dogrulama.VU}, VA={dogrulama.VA}, USA={dogrulama.USA}, MA={dogrulama.MA}")
         
         # Çok katmanlı doğrulama kontrolü
         dogrulama_ok = dogrulama.sinyal_uret()
@@ -979,14 +1062,37 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
                 'dep_gol': dep_gol
             }
             
+            # ----------------------------------------------------------------
+            # 🐛 DEBUG: Gemini AI Çağrısı
+            # ----------------------------------------------------------------
             logger.info("🤖 Gemini AI analizi isteniyor...")
+            logger.info(f"   🔑 API Keys mevcut: {len(gemini_ai.api_keys)}")
+            logger.info(f"   📊 Toplam AI çağrı sayısı: {gemini_ai.api_call_count}")
+            
             ai_analiz = await gemini_ai.analiz_yap(mac_verisi, session)
             
-            # ⭐ YENİ: Asian Handicap çek
+            if ai_analiz:
+                logger.info(f"   ✅ Gemini AI yanıtı alındı ({len(ai_analiz)} karakter)")
+            else:
+                logger.warning(f"   ❌ Gemini AI yanıtı alınamadı (None döndü)")
+                logger.warning(f"   🔍 Olası nedenler: API key yok, API hatası, timeout, response boş")
+            
+            # ----------------------------------------------------------------
+            # 🐛 DEBUG: Asian Handicap Çağrısı
+            # ----------------------------------------------------------------
             asian_handicap = None
             if event_id:
                 logger.info("📊 Asian Handicap çekiliyor...")
+                logger.info(f"   🆔 Event ID: {event_id}")
                 asian_handicap = await asian_handicap_cek(event_id, session)
+                
+                if asian_handicap:
+                    logger.info(f"   ✅ Asian Handicap alındı: {asian_handicap}")
+                else:
+                    logger.warning(f"   ❌ Asian Handicap alınamadı (None döndü)")
+                    logger.warning(f"   🔍 Olası nedenler: API hatası, odds yok, event_id geçersiz")
+            else:
+                logger.warning(f"   ⚠️ Event ID yok, Asian Handicap çekilemiyor")
             
             # Tavsiye oluştur - Basit ve anlaşılır
             if skor_durum == "OPTIMUM" and 55 <= dk <= 60:
