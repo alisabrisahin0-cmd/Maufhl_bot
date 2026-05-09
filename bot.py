@@ -573,13 +573,15 @@ class GrokAIAnalyzer:
     
     async def analiz_yap(self, mac_verisi, session):
         if not self.api_key:
-            logger.warning("🐛 Grok AI: API key yok!")
+            logger.warning("❌ Grok AI: API key yok, analiz yapılamıyor!")
+            logger.warning(f"   GROK_API_KEY environment variable set edilmemiş")
             return None
         
         try:
             self.api_call_count += 1
             
-            logger.info(f"🐛 Grok AI: API çağrısı #{self.api_call_count}")
+            logger.info(f"🤖 Grok AI: API çağrısı başlıyor (#{self.api_call_count})")
+            logger.info(f"   Maç: {mac_verisi['ev_adi']} vs {mac_verisi['dep_adi']}")
             
             prompt = f"""Sen deneyimli bir futbol analisti ve bahis uzmanısın.
 İstatistiklerin ÖTESİNDE, sezgisel ve bağlamsal analiz yap.
@@ -629,34 +631,48 @@ DOĞAL dille yaz. İnsan gibi düşün, makine gibi değil."""
                 "max_tokens": 500
             }
             
-            logger.info(f"🐛 Grok AI: POST isteği gönderiliyor...")
+            logger.info(f"🤖 Grok AI: POST isteği gönderiliyor (URL: {url})")
+            logger.info(f"   Timeout: 15 saniye")
             
             async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                logger.info(f"🐛 Grok AI: Response status: {response.status}")
+                logger.info(f"🤖 Grok AI: Response alındı - Status: {response.status}")
                 
                 if response.status != 200:
                     response_text = await response.text()
-                    logger.error(f"❌ Grok API hatası: HTTP {response.status}")
-                    logger.error(f"   Response: {response_text[:200]}")
+                    logger.error(f"❌ Grok API HATASI: HTTP {response.status}")
+                    logger.error(f"   Response body: {response_text[:500]}")
+                    logger.error(f"   🔍 Olası nedenler:")
+                    logger.error(f"      - API key geçersiz veya süresi dolmuş")
+                    logger.error(f"      - API limiti aşıldı")
+                    logger.error(f"      - Grok API servisi down")
                     return None
                 
                 data = await response.json()
-                logger.info(f"🐛 Grok AI: JSON parse başarılı")
-                logger.info(f"🐛 Grok AI: Response keys: {list(data.keys())}")
+                logger.info(f"✅ Grok AI: JSON parse başarılı")
+                logger.info(f"   Response keys: {list(data.keys())}")
                 
                 if 'choices' in data and len(data['choices']) > 0:
                     text = data['choices'][0]['message']['content']
-                    logger.info(f"✅ Grok AI yanıtı alındı ({len(text)} karakter)")
-                    logger.info(f"   İlk 100 karakter: {text[:100]}")
+                    logger.info(f"✅✅✅ GROK AI YANITI ALINDI! ✅✅✅")
+                    logger.info(f"   Karakter sayısı: {len(text)}")
+                    logger.info(f"   İlk 150 karakter: {text[:150]}")
+                    logger.info(f"   Son 50 karakter: {text[-50:]}")
                     return text
                 else:
-                    logger.warning(f"⚠️ Grok AI: 'choices' yok veya boş")
-                    logger.warning(f"   Data: {str(data)[:200]}")
+                    logger.error(f"❌ Grok AI: 'choices' yok veya boş!")
+                    logger.error(f"   Full response: {str(data)[:500]}")
+                    logger.error(f"   🔍 API yanıt verdi ama içerik yok")
                 
                 return None
                 
+        except asyncio.TimeoutError:
+            logger.error(f"❌ Grok AI TIMEOUT: 15 saniye içinde yanıt gelmedi")
+            logger.error(f"   🔍 Grok API yavaş veya erişilemiyor")
+            return None
         except Exception as e:
-            logger.error(f"❌ Grok AI hatası: {str(e)}")
+            logger.error(f"❌ Grok AI EXCEPTION: {type(e).__name__}: {str(e)}")
+            import traceback
+            logger.error(f"   Traceback: {traceback.format_exc()[:500]}")
             return None
 
 # Fallback: Gemini AI Analyzer
@@ -680,11 +696,17 @@ class GeminiAIAnalyzer:
     
     async def analiz_yap(self, mac_verisi, session):
         if not self.api_keys:
+            logger.warning("❌ Gemini AI: API key yok, analiz yapılamıyor!")
+            logger.warning(f"   GEMINI_API_KEY_1/2/3 environment variable'ları set edilmemiş")
             return None
         
         try:
             api_key = self._get_next_api_key()
             self.api_call_count += 1
+            
+            logger.info(f"🤖 Gemini AI: API çağrısı başlıyor (#{self.api_call_count})")
+            logger.info(f"   Maç: {mac_verisi['ev_adi']} vs {mac_verisi['dep_adi']}")
+            logger.info(f"   Kullanılan key index: {self.current_key_index}")
             
             prompt = f"""Sen deneyimli bir futbol analisti ve bahis uzmanısın.
 İstatistiklerin ÖTESİNDE, sezgisel ve bağlamsal analiz yap.
@@ -716,21 +738,39 @@ DOĞAL dille yaz. İnsan gibi düşün, makine gibi değil."""
                 }
             }
             
+            logger.info(f"🤖 Gemini AI: POST isteği gönderiliyor")
+            
             async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                logger.info(f"🤖 Gemini AI: Response alındı - Status: {response.status}")
+                
                 if response.status != 200:
+                    response_text = await response.text()
+                    logger.error(f"❌ Gemini API HATASI: HTTP {response.status}")
+                    logger.error(f"   Response body: {response_text[:500]}")
                     return None
                 
                 data = await response.json()
+                logger.info(f"✅ Gemini AI: JSON parse başarılı")
                 
                 if 'candidates' in data and len(data['candidates']) > 0:
                     text = data['candidates'][0]['content']['parts'][0]['text']
-                    logger.info(f"✅ Gemini AI yanıtı alındı (fallback)")
+                    logger.info(f"✅✅✅ GEMINI AI YANITI ALINDI! ✅✅✅")
+                    logger.info(f"   Karakter sayısı: {len(text)}")
+                    logger.info(f"   İlk 150 karakter: {text[:150]}")
                     return text
+                else:
+                    logger.error(f"❌ Gemini AI: 'candidates' yok veya boş!")
+                    logger.error(f"   Full response: {str(data)[:500]}")
                 
                 return None
                 
+        except asyncio.TimeoutError:
+            logger.error(f"❌ Gemini AI TIMEOUT: 15 saniye içinde yanıt gelmedi")
+            return None
         except Exception as e:
-            logger.error(f"❌ Gemini AI hatası: {str(e)}")
+            logger.error(f"❌ Gemini AI EXCEPTION: {type(e).__name__}: {str(e)}")
+            import traceback
+            logger.error(f"   Traceback: {traceback.format_exc()[:500]}")
             return None
 
 # 🔧 FIX V4: Önce Grok, sonra Gemini fallback
@@ -741,17 +781,45 @@ async def ai_analiz_yap(mac_verisi, session):
     """
     AI analizi - Önce Grok, başarısız olursa Gemini
     """
+    logger.info("=" * 60)
+    logger.info("🤖 AI ANALİZ BAŞLIYOR")
+    logger.info("=" * 60)
+    
     # Önce Grok dene
+    logger.info("🔍 1. Grok AI deneniyor...")
     if grok_ai.api_key:
+        logger.info("   ✅ Grok API key mevcut, çağrı yapılıyor...")
         result = await grok_ai.analiz_yap(mac_verisi, session)
         if result:
+            logger.info("   ✅✅✅ GROK AI BAŞARILI! Yanıt döndürülüyor")
             return result, "Grok"
+        else:
+            logger.warning("   ❌ Grok AI başarısız, Gemini'ye geçiliyor...")
+    else:
+        logger.warning("   ❌ Grok API key yok, Gemini'ye geçiliyor...")
     
     # Grok başarısız, Gemini dene
+    logger.info("🔍 2. Gemini AI deneniyor (fallback)...")
     if gemini_ai.api_keys:
+        logger.info(f"   ✅ Gemini API key mevcut ({len(gemini_ai.api_keys)} adet), çağrı yapılıyor...")
         result = await gemini_ai.analiz_yap(mac_verisi, session)
         if result:
+            logger.info("   ✅✅✅ GEMINI AI BAŞARILI! Yanıt döndürülüyor")
             return result, "Gemini"
+        else:
+            logger.error("   ❌ Gemini AI de başarısız!")
+    else:
+        logger.error("   ❌ Gemini API key yok!")
+    
+    logger.error("=" * 60)
+    logger.error("❌❌❌ TÜM AI SERVİSLERİ BAŞARISIZ!")
+    logger.error("=" * 60)
+    logger.error("🔍 Olası nedenler:")
+    logger.error("   1. API key'ler Railway'e eklenmemiş")
+    logger.error("   2. API key'ler geçersiz")
+    logger.error("   3. API servisleri down")
+    logger.error("   4. Network hatası")
+    logger.error("=" * 60)
     
     return None, None
 
@@ -1337,17 +1405,35 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
             # ----------------------------------------------------------------
             # 🐛 DEBUG: AI Analiz Çağrısı (Grok/Gemini)
             # ----------------------------------------------------------------
-            logger.info("🤖 AI analizi isteniyor...")
-            logger.info(f"   🔑 Grok API: {'✅' if grok_ai.api_key else '❌'}")
-            logger.info(f"   🔑 Gemini API: {len(gemini_ai.api_keys)} key")
+            logger.info("=" * 60)
+            logger.info("🤖 AI ANALİZİ İSTENİYOR")
+            logger.info("=" * 60)
+            logger.info(f"🔑 API Key Durumu:")
+            logger.info(f"   Grok API: {'✅ MEVCUT' if grok_ai.api_key else '❌ YOK'}")
+            logger.info(f"   Gemini API: {'✅ MEVCUT' if gemini_ai.api_keys else '❌ YOK'} ({len(gemini_ai.api_keys)} key)")
+            
+            if not grok_ai.api_key and not gemini_ai.api_keys:
+                logger.error("❌❌❌ HİÇBİR AI API KEY YOK!")
+                logger.error("   Railway environment variables kontrol edin:")
+                logger.error("   - GROK_API_KEY")
+                logger.error("   - GEMINI_API_KEY_1")
+                logger.error("   - GEMINI_API_KEY_2")
+                logger.error("   - GEMINI_API_KEY_3")
             
             ai_analiz, ai_source = await ai_analiz_yap(mac_verisi, session)
             
+            logger.info("=" * 60)
             if ai_analiz:
-                logger.info(f"   ✅ {ai_source} AI yanıtı alındı ({len(ai_analiz)} karakter)")
+                logger.info(f"✅✅✅ AI YANITI BAŞARIYLA ALINDI!")
+                logger.info(f"   Kaynak: {ai_source}")
+                logger.info(f"   Karakter sayısı: {len(ai_analiz)}")
+                logger.info(f"   İçerik önizleme: {ai_analiz[:200]}...")
             else:
-                logger.warning(f"   ❌ AI yanıtı alınamadı (None döndü)")
-                logger.warning(f"   🔍 Olası nedenler: API key yok, API hatası, timeout, response boş")
+                logger.error(f"❌❌❌ AI YANITI ALINAMADI!")
+                logger.error(f"   ai_analiz = {ai_analiz}")
+                logger.error(f"   ai_source = {ai_source}")
+                logger.error(f"   🔍 Mesaja AI analizi EKLENMEYECEK!")
+            logger.info("=" * 60)
             
             # Tavsiye oluştur - Basit ve anlaşılır
             if skor_durum == "OPTIMUM" and 55 <= dk <= 60:
@@ -1392,9 +1478,18 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
             )
             
             # AI analizi ekle (Grok veya Gemini)
+            logger.info("🔍 AI analizi mesaja ekleniyor...")
+            logger.info(f"   ai_analiz değeri: {ai_analiz is not None}")
+            logger.info(f"   ai_analiz uzunluğu: {len(ai_analiz) if ai_analiz else 0}")
+            
             if ai_analiz:
+                logger.info(f"✅ AI analizi mesaja EKLENİYOR ({ai_source})")
                 mesaj += f"{'='*30}\n"
-                mesaj += f"🤖 **{ai_source} AI:**\n{ai_analiz}\n"
+                mesaj += f"🤖 **{ai_source} AI Analizi:**\n{ai_analiz}\n"
+                logger.info(f"   Mesaj uzunluğu: {len(mesaj)} karakter")
+            else:
+                logger.warning(f"⚠️ AI analizi mesaja EKLENMEDİ (ai_analiz = None)")
+                logger.warning(f"   Mesajda sadece istatistikler görünecek")
             
             # Asian Handicap bilgisi ekle (zaten puanlamada kullanıldı)
             if asian_handicap:
