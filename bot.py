@@ -150,16 +150,17 @@ class TeamStats:
         """
         xG (Beklenen Gol) hesapla
         
-        Formül: xG = (SOT * 0.15) + (DA * 0.05) + (TA * 0.01) + (Korner * 0.03)
+        Formül: xG = (SOT * 0.15) + (DA * 0.015) + (TA * 0.01) + (Korner * 0.03)
+        
+        🔧 FIX: DA katsayısı 0.05 → 0.015 (Sahte baskı yanlış tespit düzeltmesi)
         """
-        # 🛡️ GÜVENLİK KONTROLLERI (13:38 güncellemesi)
-        # Negatif değerleri 0'a çek (None zaten dataclass default'u ile 0)
+        # 🛡️ GÜVENLİK KONTROLLERI
         sot = max(0, self.sot)
         da = max(0, self.da)
         ta = max(0, self.ta)
         korner = max(0, self.korner)
         
-        xg = (sot * 0.15) + (da * 0.05) + (ta * 0.01) + (korner * 0.03)
+        xg = (sot * 0.15) + (da * 0.015) + (ta * 0.01) + (korner * 0.03)
         return round(xg, 2)
     
     def detect_fake_pressure(self) -> bool:
@@ -970,15 +971,17 @@ def nesine_lig_kontrolu(league_name, ev_adi, dep_adi):
 def altin_pencere_kontrol(dakika):
     """
     🎯 LİTERATÜR: Altın Pencereler (Akademik Rapor)
-    - 24-36 dk: İlk Yarı Olgunlaşma Evresi (taktik oturdu, ciddi ataklar)
-    - 48-58 dk: İkinci Yarı Kırılma Evresi (yüksek enerji, savunma organize değil)
+    
+    🔧 FIX: Bonuslar azaltıldı (çok yüksekti)
+    - 24-36 dk: İlk Yarı Olgunlaşma Evresi (+2.0, eskiden +3.5)
+    - 48-58 dk: İkinci Yarı Kırılma Evresi (+3.0, eskiden +5.0)
     """
     if 24 <= dakika <= 36:
-        return 3.5, "OLGUNLAŞMA EVRESİ"  # İlk yarı olgunlaşma
+        return 2.0, "OLGUNLAŞMA EVRESİ"  # İlk yarı olgunlaşma
     elif 48 <= dakika <= 58:
-        return 5.0, "KIRILMA EVRESİ"  # İkinci yarı kırılma (en güçlü)
+        return 3.0, "KIRILMA EVRESİ"  # İkinci yarı kırılma
     elif 60 < dakika <= 75:
-        return 1.5, "GECIS_OYUNU"
+        return 1.0, "GECIS_OYUNU"
     else:
         return 0.0, "NORMAL"
 
@@ -1025,52 +1028,33 @@ def xg_hesapla(sot, da, ta, korner):
     """
     🎯 xG (Beklenen Gol) Hesaplama (V44 - Kantitatif Model)
     
-    Formül: xG = (SOT × 0.15) + (DA × 0.05) + (TA × 0.01) + (Korner × 0.03)
+    Formül: xG = (SOT × 0.15) + (DA × 0.015) + (TA × 0.01) + (Korner × 0.03)
+    
+    🔧 FIX: DA katsayısı 0.05 → 0.015 (Sahte baskı yanlış tespit düzeltmesi)
     
     Mantık:
     - İsabetli şut en önemli faktör (0.15)
-    - Tehlikeli atak ikinci faktör (0.05)
+    - Tehlikeli atak düşürüldü (0.015) - Çok yüksek sahte baskı tespit ediyordu
     - Toplam atak düşük ağırlık (0.01)
     - Korner orta ağırlık (0.03)
     """
-    # 🛡️ GÜVENLİK KONTROLLERI (13:38 güncellemesi)
-    # None kontrolü - güvenli varsayılan değer
-    if sot is None:
-        logger.warning(f"⚠️ xG hesaplama: SOT None, 0 olarak alınıyor")
-        sot = 0
-    if da is None:
-        logger.warning(f"⚠️ xG hesaplama: DA None, 0 olarak alınıyor")
-        da = 0
-    if ta is None:
-        logger.warning(f"⚠️ xG hesaplama: TA None, 0 olarak alınıyor")
-        ta = 0
-    if korner is None:
-        logger.warning(f"⚠️ xG hesaplama: Korner None, 0 olarak alınıyor")
-        korner = 0
-    
-    # Negatif değer kontrolü - güvenli varsayılan değer
-    if sot < 0:
-        logger.warning(f"⚠️ xG hesaplama: SOT negatif ({sot}), 0 olarak alınıyor")
-        sot = 0
-    if da < 0:
-        logger.warning(f"⚠️ xG hesaplama: DA negatif ({da}), 0 olarak alınıyor")
-        da = 0
-    if ta < 0:
-        logger.warning(f"⚠️ xG hesaplama: TA negatif ({ta}), 0 olarak alınıyor")
-        ta = 0
-    if korner < 0:
-        logger.warning(f"⚠️ xG hesaplama: Korner negatif ({korner}), 0 olarak alınıyor")
-        korner = 0
+    # 🛡️ GÜVENLİK KONTROLLERI
+    sot = max(0, sot if sot is not None else 0)
+    da = max(0, da if da is not None else 0)
+    ta = max(0, ta if ta is not None else 0)
+    korner = max(0, korner if korner is not None else 0)
     
     # Hesaplama
-    xg = (sot * 0.15) + (da * 0.05) + (ta * 0.01) + (korner * 0.03)
+    xg = (sot * 0.15) + (da * 0.015) + (ta * 0.01) + (korner * 0.03)
     return round(xg, 2)
 
 def da_ivmesi_kontrol(da, dakika):
     """
     🎯 V44: DA İvmesi Kontrolü (Kantitatif Filtre)
     
-    Filtre: DA ivmesi ≥ 1.5 DA/dakika
+    🔧 FIX: Eşik 1.5 → 1.0 (Çok sıkı, 98 maçtan 1'i geçiyordu)
+    
+    Filtre: DA ivmesi ≥ 1.0 DA/dakika
     Altında rölanti → elen
     
     Returns:
@@ -1081,11 +1065,11 @@ def da_ivmesi_kontrol(da, dakika):
     
     da_ivmesi = da / dakika
     
-    if da_ivmesi < 1.5:
-        logger.warning(f"❌ DA ivmesi düşük: {da_ivmesi:.2f} < 1.5 (rölanti)")
+    if da_ivmesi < 1.0:
+        logger.warning(f"❌ DA ivmesi düşük: {da_ivmesi:.2f} < 1.0 (rölanti)")
         return False, da_ivmesi
     
-    logger.info(f"✅ DA ivmesi yeterli: {da_ivmesi:.2f} ≥ 1.5")
+    logger.info(f"✅ DA ivmesi yeterli: {da_ivmesi:.2f} ≥ 1.0")
     return True, da_ivmesi
 
 def da_sot_oran_kontrol(da, sot):
@@ -1114,16 +1098,18 @@ def korner_sot_oran_kontrol(korner, sot):
     """
     🎯 V44: Korner Tuzağı Kontrolü (Kantitatif Filtre)
     
-    Filtre: Korner > 2×SOT → Tuzak → Elen
+    🔧 FIX: Kural değişti - Literatürdeki kural kullanılıyor
+    
+    Filtre: Korner ≥ 8 VE SOT < 5 → Tuzak → Elen
     
     Returns:
         (bool, str): (Geçerli mi?, Durum)
     """
-    if korner > 2 * sot:
-        logger.warning(f"❌ Korner tuzağı: {korner} > 2×{sot} = {2*sot}")
-        return False, f"KORNER_TUZAGI ({korner} > {2*sot})"
+    if korner >= 8 and sot < 5:
+        logger.warning(f"❌ Korner tuzağı: Korner={korner} ≥ 8 ve SOT={sot} < 5")
+        return False, f"KORNER_TUZAGI (Korner={korner}, SOT={sot})"
     
-    logger.info(f"✅ Korner oranı normal: {korner} ≤ 2×{sot}")
+    logger.info(f"✅ Korner oranı normal: Korner={korner}, SOT={sot}")
     return True, "OK"
 
 def sahte_baski_eliminasyonu(ev_xg, dep_xg, ev_gol, dep_gol):
@@ -1781,222 +1767,132 @@ def veri_cikart(ev_v, dep_v):
 
 async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, event_id=None, league_name=""):
     """
-    Kantitatif analiz motoru (V44 - UPDATED):
-    1. Altın pencere kontrolü (24-36, 48-58 dakika)
-    2. Skor durumu kontrolü (kaos/rölanti)
-    3. ⭐ V44: DA İvmesi kontrolü (≥ 1.5 DA/dakika)
-    4. ⭐ V44: DA/SOT oran kontrolü (> 8 → sahte baskı)
-    5. ⭐ V44: Korner/SOT oran kontrolü (> 2× → tuzak)
-    6. Fiziksel hiyerarşi kontrolü (TA ≥ DA ≥ SOT ≥ Gol)
-    7. xG (Beklenen Gol) hesaplama
-    8. Sahte baskı eliminasyonu
-    9. Çok katmanlı doğrulama (VU, VA, USA, MA)
-    10. Asian Handicap entegrasyonu
-    11. AI analizi (Grok/Gemini)
-    12. ⭐ V44: Nesine lig kontrolü
+    🎯 DISPATCHER MİMARİSİ (V44 - REFACTORED)
+    
+    Yeni Yapı:
+    1. Veriyi TeamStats objelerine dönüştür
+    2. Temel veri kalitesi kontrolü
+    3. Dakikaya göre modül seç ve çağır (DISPATCHER)
+    4. Sinyal varsa ve barajı geçiyorsa mesaj gönder
+    
+    Modüller:
+    - IYGolModule: 15-40 dk, İlk yarı gol sinyali
+    - IY2Module: 46-65 ve 76-90 dk, İkinci yarı sinyali
+    - EvDepGolModule: 20-80 dk, Ev/Dep gol sinyali (AH gerekli)
     """
     try:
         logger.info(f"🔍 Analiz: {ev_adi} vs {dep_adi} - {dk}'")
         
         # ----------------------------------------------------------------
-        # VERİ ÇIKARMA
+        # 1. VERİ ÇIKARMA VE TEAMSTATS OLUŞTURMA
         # ----------------------------------------------------------------
         v = veri_cikart(ev_v, dep_v)
         
-        sot = v['ev_sot'] + v['dep_sot']
-        ta = v['ev_ta'] + v['dep_ta']
-        da = v['ev_da'] + v['dep_da']
-        ev_gol = v['ev_gol']
-        dep_gol = v['dep_gol']
+        # TeamStats objelerine dönüştür
+        home_stats = TeamStats(
+            ta=v['ev_ta'],
+            da=v['ev_da'],
+            sot=v['ev_sot'],
+            gol=v['ev_gol'],
+            korner=v.get('ev_korner', 0)
+        )
+        
+        away_stats = TeamStats(
+            ta=v['dep_ta'],
+            da=v['dep_da'],
+            sot=v['dep_sot'],
+            gol=v['dep_gol'],
+            korner=v.get('dep_korner', 0)
+        )
+        
+        # Toplam değerler
+        sot = home_stats.sot + away_stats.sot
+        ta = home_stats.ta + away_stats.ta
+        da = home_stats.da + away_stats.da
+        ev_gol = home_stats.gol
+        dep_gol = away_stats.gol
         toplam_gol = ev_gol + dep_gol
         
         logger.info(f"📊 TA:{ta}, DA:{da}, SOT:{sot}, Gol:{toplam_gol}")
         
         # ----------------------------------------------------------------
-        # 🐛 DEBUG: Filtre Kontrolü
+        # 2. TEMEL VERİ KALİTESİ KONTROLÜ
         # ----------------------------------------------------------------
-        logger.info(f"🐛 DEBUG - Filtre Kontrolü Başlıyor")
+        logger.info(f"🛡️ Veri kalitesi kontrolü...")
         
-        # ----------------------------------------------------------------
-        # ⭐⭐⭐ KRİTİK FİLTRELER
-        # ----------------------------------------------------------------
-        
-        # 1. Skor durumu kontrolü (Kaos/Rölanti)
-        skor_ok, skor_durum = skor_durumu_kontrol(ev_gol, dep_gol)
-        logger.info(f"   ✓ Skor kontrolü: {skor_ok} ({skor_durum})")
-        if not skor_ok:
-            logger.warning(f"   ❌ ELENDİ: Skor durumu uygun değil ({skor_durum})")
+        # Veri doğrulama
+        data_valid, errors = MatchDataProtection.validate_match_data(home_stats, away_stats)
+        if not data_valid:
+            logger.warning(f"❌ Veri kalitesi kontrolü başarısız:")
+            for error in errors:
+                logger.warning(f"   - {error}")
             return None
         
-        # 2. Dakika aralığı kontrolü (15-85)
-        logger.info(f"   ✓ Dakika kontrolü: {dk} (15-85 arası olmalı)")
-        if not (15 <= dk <= 85):
-            logger.warning(f"   ❌ ELENDİ: Dakika aralık dışı: {dk}")
-            return None
-        
-        # 3. ⭐ V44: DA İvmesi Kontrolü (Kantitatif Filtre)
-        da_ivmesi_ok, da_ivmesi = da_ivmesi_kontrol(da, dk)
-        logger.info(f"   ✓ DA ivmesi kontrolü: {da_ivmesi_ok} (ivme: {da_ivmesi:.2f})")
-        if not da_ivmesi_ok:
-            logger.warning(f"   ❌ ELENDİ: DA ivmesi düşük ({da_ivmesi:.2f} < 1.5)")
-            return None
-        
-        # 4. ⭐ V44: DA/SOT Oran Kontrolü (Sahte Baskı)
-        if sot > 0:
-            da_sot_ok, da_sot_oran = da_sot_oran_kontrol(da, sot)
-            logger.info(f"   ✓ DA/SOT oran kontrolü: {da_sot_ok} (oran: {da_sot_oran:.2f})")
-            if not da_sot_ok:
-                logger.warning(f"   ❌ ELENDİ: Sahte baskı - DA/SOT oranı yüksek ({da_sot_oran:.2f} > 8)")
-                return None
-        
-        # 5. ⭐ YENİ: Oyun Durumu Normalizasyonu
-        ev_da_norm, ev_sot_norm, dep_da_norm, dep_sot_norm = oyun_durumu_normalizasyonu(
-            ev_gol, dep_gol, v['ev_da'], v['dep_da'], v['ev_sot'], v['dep_sot'], dk
-        )
-        logger.info(f"   ✓ Normalizasyon: Ev DA:{v['ev_da']}→{ev_da_norm}, Dep DA:{v['dep_da']}→{dep_da_norm}")
-        
-        # Normalize edilmiş değerleri kullan
-        da_norm = ev_da_norm + dep_da_norm
-        sot_norm = ev_sot_norm + dep_sot_norm
-        
-        # 4. ⭐ YENİ: xG (Beklenen Gol) Hesaplama
-        ev_korner = v.get('ev_korner', 0)
-        dep_korner = v.get('dep_korner', 0)
-        
-        ev_xg = xg_hesapla(v['ev_sot'], v['ev_da'], v['ev_ta'], ev_korner)
-        dep_xg = xg_hesapla(v['dep_sot'], v['dep_da'], v['dep_ta'], dep_korner)
-        logger.info(f"   ✓ xG: Ev={ev_xg}, Dep={dep_xg}")
-        
-        # 5. ⭐ YENİ: Sahte Baskı Eliminasyonu - FİX EDİLDİ
-        sahte_baski_ok, sahte_baski_durum = sahte_baski_eliminasyonu(ev_xg, dep_xg, ev_gol, dep_gol)
-        logger.info(f"   ✓ Sahte baskı kontrolü: {sahte_baski_ok} (Durum: {sahte_baski_durum})")
-        if not sahte_baski_ok:
-            logger.warning(f"   ❌ ELENDİ: Sahte baskı tespit edildi: {sahte_baski_durum}")
-            return None  # SİNYAL GÖNDERİLMEMELİ!
-        
-        # 6. ⭐ V44: Korner/SOT Oran Kontrolü (Kantitatif Filtre)
-        toplam_korner = ev_korner + dep_korner
-        if toplam_korner > 0 and sot > 0:
-            korner_sot_ok, korner_durum = korner_sot_oran_kontrol(toplam_korner, sot)
-            logger.info(f"   ✓ Korner/SOT oran kontrolü: {korner_sot_ok} ({korner_durum})")
-            if not korner_sot_ok:
-                logger.warning(f"   ❌ ELENDİ: Korner tuzağı - {korner_durum}")
-                return None
-        
-        # 6b. ⭐ YENİ: Eski Korner Tuzağı Kontrolü (Ek kontrol)
-        if ev_korner > 0 or dep_korner > 0:
-            korner_ok = korner_tuzagi_kontrolu(ev_korner, dep_korner, v['ev_sot'], v['dep_sot'])
-            logger.info(f"   ✓ Korner tuzağı kontrolü (ek): {korner_ok}")
-            if not korner_ok:
-                logger.warning(f"   ❌ ELENDİ: Korner tuzağı tespit edildi (ek kontrol)")
-                return None
-        
-        # 7. Fiziksel hiyerarşi kontrolü (13:38 güncellemesi: SOT >= Gol eklendi)
-        hiyerarsi_ok = ta >= da and da >= sot and sot >= toplam_gol and ta >= sot
-        logger.info(f"   ✓ Fiziksel hiyerarşi: {hiyerarsi_ok} (TA:{ta} >= DA:{da} >= SOT:{sot} >= Gol:{toplam_gol})")
-        if not hiyerarsi_ok:
-            logger.warning(f"   ❌ ELENDİ: Fiziksel hiyerarşi ihlali")
-            return None
-        
-        # 8. Gol vs SOT kontrolü
-        gol_sot_ok = sot >= toplam_gol
-        logger.info(f"   ✓ Gol/SOT kontrolü: {gol_sot_ok} (SOT:{sot} >= Gol:{toplam_gol})")
-        if not gol_sot_ok:
-            logger.warning(f"   ❌ ELENDİ: SOT < Gol")
-            return None
-        
-        # 9. Dakika başı şut limiti
-        sot_limit = dk * 0.7 if dk > 0 else 999
-        sot_limit_ok = sot <= sot_limit
-        logger.info(f"   ✓ SOT limit kontrolü: {sot_limit_ok} (SOT:{sot} <= {sot_limit:.1f})")
-        if not sot_limit_ok:
-            logger.warning(f"   ❌ ELENDİ: SOT limiti aşıldı")
-            return None
-        
-        # 10. ⭐ YENİ: Master Algoritma (Ekstrem Koşul Kontrolü)
-        ma_aktif = False
-        if toplam_gol >= 4 and dk >= 75:
-            logger.warning(f"   ⚠️ Master Algoritma: Toplam gol {toplam_gol} >= 4 ve dakika {dk} >= 75")
-            ma_aktif = True
-        if abs(ev_gol - dep_gol) >= 3 and dk >= 70:
-            logger.warning(f"   ⚠️ Master Algoritma: Gol farkı {abs(ev_gol - dep_gol)} >= 3 ve dakika {dk} >= 70")
-            ma_aktif = True
-        
-        logger.info(f"🎉 TÜM FİLTRELERDEN GEÇTİ!")
+        logger.info(f"✅ Veri kalitesi kontrolü başarılı")
         
         # ----------------------------------------------------------------
-        # ⭐⭐⭐ PUANLAMA SİSTEMİ (Literatür Bazlı + Normalizasyon + Asian Handicap)
+        # 3. DISPATCHER: DAKİKAYA GÖRE MODÜL SEÇ VE ÇAĞIR
         # ----------------------------------------------------------------
-        puan = 4.0
+        logger.info(f"🎯 DISPATCHER: Dakika {dk}' için modül seçiliyor...")
         
-        # Altın pencere bonusu
-        zaman_bonusu, zaman_tipi = altin_pencere_kontrol(dk)
-        puan += zaman_bonusu
-        if zaman_bonusu > 0:
-            logger.info(f"⭐ Altın pencere bonusu: +{zaman_bonusu} ({zaman_tipi})")
+        sinyal = None
         
-        # Skor durumu bonusu
-        if skor_durum == "OPTIMUM":
-            puan += 3.0
-            logger.info(f"🎯 Optimum skor bonusu: +3.0")
+        # İlk Yarı Gol Modülü (15-40 dk)
+        if 15 <= dk <= 40:
+            logger.info(f"   → IYGolModule çağrılıyor...")
+            sinyal = IYGolModule.check(dk, ev_gol, dep_gol, home_stats, away_stats)
         
-        # SOT puanı (epilasyon kontrolü ile) - Normalize edilmiş değer kullan
-        sot_puan = sot_epilasyon_kontrol(sot_norm)
-        puan += sot_puan
-        logger.info(f"🎯 SOT puanı: {sot_puan} (SOT norm: {sot_norm})")
+        # İkinci Yarı Modülü (46-65 ve 76-90 dk)
+        elif (46 <= dk <= 65) or (76 <= dk <= 90):
+            logger.info(f"   → IY2Module çağrılıyor...")
+            sinyal = IY2Module.check(dk, home_stats, away_stats, ev_gol, dep_gol)
         
-        # DA bonusu (her 10 DA için 0.5 puan, max 3.0) - Normalize edilmiş değer kullan
-        da_bonus = min((da_norm // 10) * 0.5, 3.0)
-        puan += da_bonus
-        logger.info(f"📊 DA bonusu: +{da_bonus} (DA norm: {da_norm})")
-        
-        # ⭐⭐⭐ YENİ: ASIAN HANDICAP PUANLAMASI (Erken çek - event_id gerekli)
-        asian_handicap = None
-        ah_bonus = 0.0
-        if event_id:
-            logger.info("📊 Asian Handicap çekiliyor (puanlama için)...")
-            asian_handicap = await asian_handicap_cek(event_id, session)
+        # Ev/Dep Gol Modülü (20-80 dk, AH gerekli)
+        elif 20 <= dk <= 80:
+            logger.info(f"   → EvDepGolModule çağrılıyor (AH gerekli)...")
             
-            if asian_handicap:
-                ev_hc = asian_handicap['ev_handicap']
-                dep_hc = asian_handicap['dep_handicap']
-                ev_oran = asian_handicap['ev_oran']
-                dep_oran = asian_handicap['dep_oran']
+            # Asian Handicap çek
+            if event_id:
+                ah_data = await asian_handicap_cek(event_id, session)
                 
-                logger.info(f"   ✅ AH alındı: Ev {ev_hc} ({ev_oran}), Dep {dep_hc} ({dep_oran})")
-                
-                # Değerli çizgiler (Value lines): +1.0 veya +2.0 bonus
-                # Mantık: Handikap değeri büyükse (örn. +1.5, +2.5) değerlidir
-                if abs(ev_hc) >= 1.5 or abs(dep_hc) >= 1.5:
-                    ah_bonus = 2.0
-                    logger.info(f"   💎 Değerli AH çizgisi: +{ah_bonus} puan (|HC| >= 1.5)")
-                elif abs(ev_hc) >= 1.0 or abs(dep_hc) >= 1.0:
-                    ah_bonus = 1.0
-                    logger.info(f"   💎 Değerli AH çizgisi: +{ah_bonus} puan (|HC| >= 1.0)")
-                
-                # Tuzak çizgiler (Trap lines): -2.0 ceza
-                # Mantık: Çok düşük handikap + düşük oran = tuzak
-                # Örnek: -0.25 handikap + 1.50 oran = şüpheli
-                if (abs(ev_hc) <= 0.25 and ev_oran < 1.60) or (abs(dep_hc) <= 0.25 and dep_oran < 1.60):
-                    ah_bonus = -2.0
-                    logger.warning(f"   ⚠️ Tuzak AH çizgisi: {ah_bonus} puan (düşük HC + düşük oran)")
-                
-                puan += ah_bonus
-                logger.info(f"📊 Asian Handicap bonusu: {ah_bonus:+.1f}")
+                if ah_data:
+                    ah_home = ah_data['ev_handicap']
+                    ah_away = ah_data['dep_handicap']
+                    logger.info(f"   ✅ AH alındı: Ev={ah_home}, Dep={ah_away}")
+                    
+                    sinyal = EvDepGolModule.check(dk, home_stats, away_stats, ah_home, ah_away)
+                else:
+                    logger.warning(f"   ⚠️ AH alınamadı, EvDepGolModule atlanıyor")
             else:
-                logger.warning(f"   ⚠️ Asian Handicap alınamadı, bonus yok")
+                logger.warning(f"   ⚠️ event_id yok, EvDepGolModule atlanıyor")
         
-        logger.info(f"💯 Toplam puan: {round(puan, 1)}")
+        else:
+            logger.info(f"   ⚠️ Dakika {dk}' hiçbir modül aralığında değil")
+            return None
         
         # ----------------------------------------------------------------
-        # ⭐ YENİ: ÇOK KATMANLI DOĞRULAMA (LİTERATÜR) - FİX EDİLDİ
+        # 4. SİNYAL KONTROLÜ VE MESAJ OLUŞTURMA
         # ----------------------------------------------------------------
-        logger.info(f"🐛 DEBUG - Çok Katmanlı Doğrulama Başlıyor")
-        dogrulama = CokKatmanliDogrulama()
+        if not sinyal or not sinyal.valid:
+            if sinyal:
+                logger.warning(f"❌ Sinyal geçersiz: {sinyal.reason}")
+            else:
+                logger.warning(f"❌ Sinyal oluşturulamadı")
+            return None
         
-        # VU (Veri Uygunluğu): Tüm kritik filtrelerden geçtiyse 1
-        dogrulama.VU = 1
-        logger.info(f"   ✓ VU (Veri Uygunluğu) = 1 (tüm filtrelerden geçti)")
+        logger.info(f"✅ Sinyal geçerli: {sinyal.signal_type.value}")
+        logger.info(f"   Puan: {sinyal.score:.1f}")
+        logger.info(f"   Sebep: {sinyal.reason}")
+        logger.info(f"   Detaylar: {sinyal.details}")
+        
+        # Puan barajı kontrolü (6.5 veya 7.0)
+        PUAN_BARAJI = 6.5  # 🔧 FIX: 9.0 → 6.5 (Çok yüksekti, hiç maç geçmiyordu)
+        
+        if sinyal.score < PUAN_BARAJI:
+            logger.warning(f"❌ Puan yetersiz: {sinyal.score:.1f} < {PUAN_BARAJI}")
+            return None
+        
+        logger.info(f"🎉 SİNYAL BARAJDAN GEÇTİ! Puan: {sinyal.score:.1f} >= {PUAN_BARAJI}")
         
         # ----------------------------------------------------------------
         # 🐛 DEBUG: VA (Veri Anomalisi) Hesaplama - FİX EDİLDİ
