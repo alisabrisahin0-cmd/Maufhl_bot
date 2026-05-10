@@ -1895,238 +1895,74 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
         logger.info(f"🎉 SİNYAL BARAJDAN GEÇTİ! Puan: {sinyal.score:.1f} >= {PUAN_BARAJI}")
         
         # ----------------------------------------------------------------
-        # 🐛 DEBUG: VA (Veri Anomalisi) Hesaplama - FİX EDİLDİ
+        # 5. MESAJ OLUŞTURMA (AI Analizi ile)
         # ----------------------------------------------------------------
-        logger.info(f"🐛 DEBUG - VA (Veri Anomalisi) Hesaplama:")
-        logger.info(f"   📊 DA orijinal: {da}")
-        logger.info(f"   📊 DA normalize: {da_norm}")
-        logger.info(f"   📊 DA farkı: {abs(da - da_norm)}")
-        logger.info(f"   📊 DA eşik (%20): {da * 0.2}")  # 🔧 FIX: %30 -> %20 (daha hassas)
-        logger.info(f"   📊 SOT orijinal: {sot}")
-        logger.info(f"   📊 SOT normalize: {sot_norm}")
-        logger.info(f"   📊 SOT farkı: {abs(sot - sot_norm)}")
-        logger.info(f"   📊 SOT eşik (%20): {sot * 0.2}")  # 🔧 FIX: %30 -> %20 (daha hassas)
+        logger.info(f"📝 Mesaj oluşturuluyor...")
         
-        # 🔧 FIX: VA eşiğini düşür (%30 -> %20) ve minimum fark ekle
-        da_fark = abs(da - da_norm)
-        sot_fark = abs(sot - sot_norm)
+        # AI analizi için maç verisi hazırla
+        mac_verisi = {
+            'ev_adi': ev_adi,
+            'dep_adi': dep_adi,
+            'skor': skor,
+            'dakika': dk,
+            'ta': ta,
+            'da': da,
+            'sot': sot,
+            'gol': toplam_gol,
+            'ev_ta': v['ev_ta'],
+            'dep_ta': v['dep_ta'],
+            'ev_da': v['ev_da'],
+            'dep_da': v['dep_da'],
+            'ev_sot': v['ev_sot'],
+            'dep_sot': v['dep_sot'],
+            'ev_gol': ev_gol,
+            'dep_gol': dep_gol
+        }
         
-        if (da_fark > max(da * 0.2, 5)) or (sot_fark > max(sot * 0.2, 2)):
-            dogrulama.VA = 1
-            logger.info(f"   ✓ VA = 1 (Veri anomalisi tespit edildi - normalizasyon farkı yüksek)")
+        # AI analizi çağır
+        logger.info("🤖 AI analizi isteniyor...")
+        ai_analiz, ai_source = await ai_analiz_yap(mac_verisi, session)
+        
+        if ai_analiz:
+            logger.info(f"✅ AI analizi alındı ({ai_source})")
         else:
-            logger.info(f"   ✓ VA = 0 (Veri anomalisi yok - normalizasyon farkı düşük)")
+            logger.warning(f"⚠️ AI analizi alınamadı")
         
-        # ----------------------------------------------------------------
-        # 🐛 DEBUG: USA (Uzun Süreli Anomali) Hesaplama - FİX EDİLDİ
-        # ----------------------------------------------------------------
-        logger.info(f"🐛 DEBUG - USA (Uzun Süreli Anomali) Hesaplama:")
-        logger.info(f"   📊 Dakika: {dk}")
-        logger.info(f"   📊 VA değeri: {dogrulama.VA}")
-        logger.info(f"   📊 Koşul: dk >= 75 AND VA == 1")  # 🔧 FIX: 80 -> 75 (daha erken tespit)
+        # Mesaj oluştur
+        mesaj = (
+            f"💎 **SİNYAL (Puan: {sinyal.score:.1f})**\n"
+            f"⚽ {ev_adi} {skor} {dep_adi}\n"
+            f"⏱ Dakika: {dk}' | Sinyal: {sinyal.signal_type.value}\n"
+            f"{'='*30}\n"
+            f"📊 **İstatistikler:**\n"
+            f"• Toplam Atak: {ta} (Ev:{v['ev_ta']}, Dep:{v['dep_ta']})\n"
+            f"• Tehlikeli Atak: {da} (Ev:{v['ev_da']}, Dep:{v['dep_da']})\n"
+            f"• İsabetli Şut: {sot} (Ev:{v['ev_sot']}, Dep:{v['dep_sot']})\n"
+            f"• Gol: {toplam_gol} (Ev:{ev_gol}, Dep:{dep_gol})\n"
+            f"{'='*30}\n"
+            f"🎯 **Sinyal Detayları:**\n"
+            f"• Sebep: {sinyal.reason}\n"
+        )
         
-        # 🔧 FIX: USA eşiğini düşür (80 -> 75 dakika)
-        if dk >= 75 and dogrulama.VA == 1:
-            dogrulama.USA = 1
-            logger.info(f"   ✓ USA = 1 (Uzun süreli anomali tespit edildi)")
-        else:
-            logger.info(f"   ✓ USA = 0 (Uzun süreli anomali yok)")
-            if dk < 75:
-                logger.info(f"      Sebep: Dakika {dk} < 75")
-            if dogrulama.VA == 0:
-                logger.info(f"      Sebep: VA = 0 (anomali yok)")
+        # Detayları ekle
+        if sinyal.details:
+            for key, value in sinyal.details.items():
+                mesaj += f"• {key}: {value}\n"
         
-        # ----------------------------------------------------------------
-        # 🐛 DEBUG: MA (Master Algoritma) Hesaplama
-        # ----------------------------------------------------------------
-        logger.info(f"🐛 DEBUG - MA (Master Algoritma) Hesaplama:")
-        logger.info(f"   📊 Toplam gol: {toplam_gol}")
-        logger.info(f"   📊 Gol farkı: {abs(ev_gol - dep_gol)}")
-        logger.info(f"   📊 Dakika: {dk}")
-        logger.info(f"   📊 Koşul 1: toplam_gol >= 4 AND dk >= 75")
-        logger.info(f"   📊 Koşul 2: gol_farki >= 3 AND dk >= 70")
-        logger.info(f"   📊 ma_aktif değeri: {ma_aktif}")
-        
-        # MA (Master Algoritma): Ekstrem koşul varsa 1
-        if ma_aktif:
-            dogrulama.MA = 1
-            logger.info(f"   ✓ MA = 1 (Master Algoritma aktif - ekstrem koşul)")
-        else:
-            logger.info(f"   ✓ MA = 0 (Master Algoritma pasif - normal koşul)")
-        
-        # ----------------------------------------------------------------
-        # 🐛 DEBUG: Doğrulama Özeti - STRICT SYNC RESTORED
-        # ----------------------------------------------------------------
-        logger.info(f"🐛 DEBUG - Doğrulama Özeti:")
-        logger.info(f"   VU={dogrulama.VU}, VA={dogrulama.VA}, USA={dogrulama.USA}, MA={dogrulama.MA}")
-        
-        # ⭐⭐⭐ STRICT VA/USA SYNCHRONIZATION RESTORED (85-90% başarı için kritik)
-        # Kural: VA ve USA her ikisi 0 veya her ikisi 1 olmalı
-        dogrulama_ok = False  # Varsayılan: geçersiz
-        
-        # Master Algoritma kontrolü (öncelikli)
-        if dogrulama.MA == 1:
-            logger.warning(f"   ❌ ELENDİ: Master Algoritma aktif (ekstrem koşul)")
-            dogrulama_ok = False
-        # VU kontrolü (temel gereksinim)
-        elif dogrulama.VU == 0:
-            logger.warning(f"   ❌ ELENDİ: Veri Uygunluğu başarısız")
-            dogrulama_ok = False
-        # ⭐⭐⭐ STRICT VA/USA SYNC (LİTERATÜR)
-        elif (dogrulama.VA == 0 and dogrulama.USA == 0) or (dogrulama.VA == 1 and dogrulama.USA == 1):
-            logger.info(f"   ✅ Doğrulama başarılı: VU={dogrulama.VU}, VA={dogrulama.VA}, USA={dogrulama.USA} (SYNC OK)")
-            dogrulama_ok = True
-        else:
-            logger.warning(f"   ❌ ELENDİ: VA/USA senkronizasyonu bozuk (VA={dogrulama.VA}, USA={dogrulama.USA})")
-            dogrulama_ok = False
-        
-        if not dogrulama_ok:
-            logger.warning(f"   ❌ ELENDİ: Çok katmanlı doğrulama başarısız")
-            logger.info(f"      VU:{dogrulama.VU}, VA:{dogrulama.VA}, USA:{dogrulama.USA}, MA:{dogrulama.MA}")
-            return None
-        
-        # ----------------------------------------------------------------
-        # SİNYAL OLUŞTURMA (Puan >= 9.0)
-        # ----------------------------------------------------------------
-        logger.info(f"🐛 DEBUG - Puan Kontrolü: {round(puan, 1)} >= 9.0")
-        if puan >= 9.0:  # Puan eşiği 9.0'a geri alındı
-            # Gemini AI analizi
-            mac_verisi = {
-                'ev_adi': ev_adi,
-                'dep_adi': dep_adi,
-                'skor': skor,
-                'dakika': dk,
-                'ta': ta,
-                'da': da,
-                'sot': sot,
-                'gol': toplam_gol,
-                'ev_ta': v['ev_ta'],
-                'dep_ta': v['dep_ta'],
-                'ev_da': v['ev_da'],
-                'dep_da': v['dep_da'],
-                'ev_sot': v['ev_sot'],
-                'dep_sot': v['dep_sot'],
-                'ev_gol': ev_gol,
-                'dep_gol': dep_gol
-            }
-            
-            # ----------------------------------------------------------------
-            # 🐛 DEBUG: AI Analiz Çağrısı (Grok/Gemini)
-            # ----------------------------------------------------------------
-            logger.info("=" * 60)
-            logger.info("🤖 AI ANALİZİ İSTENİYOR")
-            logger.info("=" * 60)
-            logger.info(f"🔑 API Key Durumu:")
-            logger.info(f"   Grok API: {'✅ MEVCUT' if grok_ai.api_key else '❌ YOK'}")
-            logger.info(f"   Gemini API: {'✅ MEVCUT' if gemini_ai.api_keys else '❌ YOK'} ({len(gemini_ai.api_keys)} key)")
-            
-            if not grok_ai.api_key and not gemini_ai.api_keys:
-                logger.error("❌❌❌ HİÇBİR AI API KEY YOK!")
-                logger.error("   Railway environment variables kontrol edin:")
-                logger.error("   - GROK_API_KEY")
-                logger.error("   - GEMINI_API_KEY_1")
-                logger.error("   - GEMINI_API_KEY_2")
-                logger.error("   - GEMINI_API_KEY_3")
-            
-            ai_analiz, ai_source = await ai_analiz_yap(mac_verisi, session)
-            
-            logger.info("=" * 60)
-            if ai_analiz:
-                logger.info(f"✅✅✅ AI YANITI BAŞARIYLA ALINDI!")
-                logger.info(f"   Kaynak: {ai_source}")
-                logger.info(f"   Karakter sayısı: {len(ai_analiz)}")
-                logger.info(f"   İçerik önizleme: {ai_analiz[:200]}...")
-            else:
-                logger.error(f"❌❌❌ AI YANITI ALINAMADI!")
-                logger.error(f"   ai_analiz = {ai_analiz}")
-                logger.error(f"   ai_source = {ai_source}")
-                logger.error(f"   🔍 Mesaja AI analizi EKLENMEYECEK!")
-            logger.info("=" * 60)
-            
-            # Tavsiye oluştur - Basit ve anlaşılır
-            if skor_durum == "OPTIMUM" and 55 <= dk <= 60:
-                tavsiye = "⭐ ALTIN FIRSAT: SIRADAKİ GOL"
-            else:
-                tavsiye = "🎯 SIRADAKİ GOL"
-            
-            # xG analizi ekle
-            if ev_xg > dep_xg + 0.5:
-                tavsiye += f"\n💡 Ev sahibi daha baskın (xG: {ev_xg:.1f} vs {dep_xg:.1f})"
-            elif dep_xg > ev_xg + 0.5:
-                tavsiye += f"\n💡 Deplasman daha baskın (xG: {dep_xg:.1f} vs {ev_xg:.1f})"
-            else:
-                tavsiye += f"\n💡 Dengeli oyun (xG: {ev_xg:.1f} vs {ev_xg:.1f})"
-            
-            # Toplam xG hesapla
-            xg = ev_xg + dep_xg
-            
-            mesaj = (
-                f"💎 **SİNYAL (Puan: {round(puan,1)})**\n"
-                f"⚽ {ev_adi} {skor} {dep_adi}\n"
-                f"⏱ Dakika: {dk}' | Pencere: {zaman_tipi}\n"
-                f"{'='*30}\n"
-                f"📊 **İstatistikler:**\n"
-                f"• Toplam Atak: {ta} (Ev:{v['ev_ta']}, Dep:{v['dep_ta']})\n"
-                f"• Tehlikeli Atak: {da} (Ev:{v['ev_da']}, Dep:{v['dep_da']})\n"
-                f"• İsabetli Şut: {sot} (Ev:{v['ev_sot']}, Dep:{v['dep_sot']})\n"
-                f"• Gol: {toplam_gol} (Ev:{ev_gol}, Dep:{dep_gol})\n"
-                f"• xG (Beklenen Gol): Ev {ev_xg}, Dep {dep_xg}\n"
-                f"{'='*30}\n"
-                f"🎯 **Doğrulama:** VU={dogrulama.VU}, VA={dogrulama.VA}, USA={dogrulama.USA}, MA={dogrulama.MA}\n"
-                f"{'='*30}\n"
-                f"💡 **Tavsiye:** {tavsiye}\n"
-                f"{'='*30}\n"
-                f"🔍 **Filtre Sonuçları:**\n"
-                f"✅ Skor Durumu: {skor_durum}\n"
-                f"✅ Dakika Penceresi: {dk}' ({zaman_tipi if zaman_bonusu > 0 else 'Normal'})\n"
-                f"✅ Fiziksel Hiyerarşi: TA({ta}) > DA({da}) > SOT({sot})\n"
-                f"✅ xG Kontrolü: {xg:.2f}\n"
-                f"✅ Sahte Baskı: {'YOK' if sahte_baski_durum == 'YOK' else f'TESPİT EDİLDİ ({sahte_baski_durum})'}\n"
-                f"✅ Doğrulama: VU:{dogrulama.VU} VA:{dogrulama.VA} USA:{dogrulama.USA} MA:{dogrulama.MA}\n"
-            )
-            
-            # AI analizi ekle (Grok veya Gemini)
-            logger.info("🔍 AI analizi mesaja ekleniyor...")
-            logger.info(f"   ai_analiz değeri: {ai_analiz is not None}")
-            logger.info(f"   ai_analiz uzunluğu: {len(ai_analiz) if ai_analiz else 0}")
-            
-            # ⭐ V44 FIX: AI analizi her zaman eklenmeli (varsa)
-            if ai_analiz:
-                logger.info(f"✅ AI analizi mesaja EKLENİYOR ({ai_source})")
-                mesaj += f"{'='*30}\n"
-                mesaj += f"🤖 **{ai_source} AI Analizi:**\n{ai_analiz}\n"
-                logger.info(f"   Mesaj uzunluğu: {len(mesaj)} karakter")
-            else:
-                logger.warning(f"⚠️ AI analizi alınamadı, mesaja eklenmedi")
-                mesaj += f"{'='*30}\n"
-                mesaj += f"⚠️ **AI analizi alınamadı**\n"
-            
-            # Asian Handicap bilgisi ekle (zaten puanlamada kullanıldı)
-            if asian_handicap:
-                mesaj += f"{'='*30}\n"
-                mesaj += f"📊 **Asian Handicap (Bonus: {ah_bonus:+.1f}):**\n"
-                mesaj += f"• Ev: {asian_handicap['ev_handicap']} (Oran: {asian_handicap['ev_oran']})\n"
-                mesaj += f"• Dep: {asian_handicap['dep_handicap']} (Oran: {asian_handicap['dep_oran']})\n"
-                
-                # Yorum ekle
-                if ah_bonus > 0:
-                    mesaj += f"• 💎 Değerli çizgi tespit edildi\n"
-                elif ah_bonus < 0:
-                    mesaj += f"• ⚠️ Tuzak çizgi tespit edildi\n"
-            
-            # ⭐ V44: Nesine Lig Kontrolü (Sadece Nesine liglerinde göster)
+        # AI analizi ekle
+        if ai_analiz:
             mesaj += f"{'='*30}\n"
-            if nesine_lig_kontrolu(league_name, ev_adi, dep_adi):
-                mesaj += f"✅ **Bu maç Nesine'de oynanıyor**"
-            else:
-                mesaj += f"ℹ️ **Bu maç Nesine'de oynanmıyor**"
-            
-            logger.info(f"✅ SİNYAL OLUŞTURULDU (AI: {'✅' if ai_analiz else '❌'})")
-            return mesaj
+            mesaj += f"🤖 **{ai_source} AI Analizi:**\n{ai_analiz}\n"
+        
+        # Nesine lig kontrolü
+        mesaj += f"{'='*30}\n"
+        if nesine_lig_kontrolu(league_name, ev_adi, dep_adi):
+            mesaj += f"✅ **Bu maç Nesine'de oynanıyor**"
         else:
-            logger.warning(f"   ❌ ELENDİ: Puan yetersiz: {round(puan, 1)} < 9.0")
-            logger.info(f"      Puan detayı: Baz=4.0, Zaman={zaman_bonusu}, Skor={'3.0' if skor_durum=='OPTIMUM' else '0'}, SOT={sot_puan}, DA={da_bonus}")
-            return None
+            mesaj += f"ℹ️ **Bu maç Nesine'de oynanmıyor**"
+        
+        logger.info(f"✅ SİNYAL MESAJI OLUŞTURULDU")
+        return mesaj
             
     except Exception as e:
         logger.error(f"❌ Analiz hatası: {str(e)}")
