@@ -152,7 +152,14 @@ class TeamStats:
         
         Formül: xG = (SOT * 0.15) + (DA * 0.05) + (TA * 0.01) + (Korner * 0.03)
         """
-        xg = (self.sot * 0.15) + (self.da * 0.05) + (self.ta * 0.01) + (self.korner * 0.03)
+        # 🛡️ GÜVENLİK KONTROLLERI (13:38 güncellemesi)
+        # Negatif değerleri 0'a çek (None zaten dataclass default'u ile 0)
+        sot = max(0, self.sot)
+        da = max(0, self.da)
+        ta = max(0, self.ta)
+        korner = max(0, self.korner)
+        
+        xg = (sot * 0.15) + (da * 0.05) + (ta * 0.01) + (korner * 0.03)
         return round(xg, 2)
     
     def detect_fake_pressure(self) -> bool:
@@ -1026,6 +1033,36 @@ def xg_hesapla(sot, da, ta, korner):
     - Toplam atak düşük ağırlık (0.01)
     - Korner orta ağırlık (0.03)
     """
+    # 🛡️ GÜVENLİK KONTROLLERI (13:38 güncellemesi)
+    # None kontrolü - güvenli varsayılan değer
+    if sot is None:
+        logger.warning(f"⚠️ xG hesaplama: SOT None, 0 olarak alınıyor")
+        sot = 0
+    if da is None:
+        logger.warning(f"⚠️ xG hesaplama: DA None, 0 olarak alınıyor")
+        da = 0
+    if ta is None:
+        logger.warning(f"⚠️ xG hesaplama: TA None, 0 olarak alınıyor")
+        ta = 0
+    if korner is None:
+        logger.warning(f"⚠️ xG hesaplama: Korner None, 0 olarak alınıyor")
+        korner = 0
+    
+    # Negatif değer kontrolü - güvenli varsayılan değer
+    if sot < 0:
+        logger.warning(f"⚠️ xG hesaplama: SOT negatif ({sot}), 0 olarak alınıyor")
+        sot = 0
+    if da < 0:
+        logger.warning(f"⚠️ xG hesaplama: DA negatif ({da}), 0 olarak alınıyor")
+        da = 0
+    if ta < 0:
+        logger.warning(f"⚠️ xG hesaplama: TA negatif ({ta}), 0 olarak alınıyor")
+        ta = 0
+    if korner < 0:
+        logger.warning(f"⚠️ xG hesaplama: Korner negatif ({korner}), 0 olarak alınıyor")
+        korner = 0
+    
+    # Hesaplama
     xg = (sot * 0.15) + (da * 0.05) + (ta * 0.01) + (korner * 0.03)
     return round(xg, 2)
 
@@ -1854,9 +1891,9 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
                 logger.warning(f"   ❌ ELENDİ: Korner tuzağı tespit edildi (ek kontrol)")
                 return None
         
-        # 7. Fiziksel hiyerarşi kontrolü
-        hiyerarsi_ok = ta >= da and da >= sot and ta >= sot
-        logger.info(f"   ✓ Fiziksel hiyerarşi: {hiyerarsi_ok} (TA:{ta} >= DA:{da} >= SOT:{sot})")
+        # 7. Fiziksel hiyerarşi kontrolü (13:38 güncellemesi: SOT >= Gol eklendi)
+        hiyerarsi_ok = ta >= da and da >= sot and sot >= toplam_gol and ta >= sot
+        logger.info(f"   ✓ Fiziksel hiyerarşi: {hiyerarsi_ok} (TA:{ta} >= DA:{da} >= SOT:{sot} >= Gol:{toplam_gol})")
         if not hiyerarsi_ok:
             logger.warning(f"   ❌ ELENDİ: Fiziksel hiyerarşi ihlali")
             return None
