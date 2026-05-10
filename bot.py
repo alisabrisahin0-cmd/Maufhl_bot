@@ -169,13 +169,18 @@ class TeamStats:
         
         Mantık: Yüksek TA/DA ama düşük SOT = Sahte baskı
         """
+        # 1. SIFIR ŞUT KONTROLÜ (YENİ): Şut yok ama DA 8'den fazlaysa kesin sahte baskı
+        if self.da > 8 and self.sot == 0:
+            return True
+
+        # 2. NORMAL ORAN KONTROLÜ
         if self.da > 0 and self.sot > 0:
             da_sot_ratio = self.da / self.sot
             # DA/SOT oranı > 8 ise sahte baskı
             if da_sot_ratio > 8:
                 return True
         
-        # Yüksek korner ama düşük SOT
+        # 3. KORNER TUZAĞI KONTROLÜ
         if self.korner >= 8 and self.sot < 5:
             return True
         
