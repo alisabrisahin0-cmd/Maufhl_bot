@@ -1767,18 +1767,24 @@ def veri_cikart(ev_v, dep_v):
 
 async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, event_id=None, league_name=""):
     """
-    🎯 DISPATCHER MİMARİSİ (V44 - REFACTORED)
+    🎯 DISPATCHER MİMARİSİ (V44 - REFACTORED + GLOBAL FİLTRELER)
     
     Yeni Yapı:
     1. Veriyi TeamStats objelerine dönüştür
-    2. Temel veri kalitesi kontrolü
-    3. Dakikaya göre modül seç ve çağır (DISPATCHER)
-    4. Sinyal varsa ve barajı geçiyorsa mesaj gönder
+    2. Temel veri kalitesi kontrolü (MatchDataProtection)
+    3. Global filtreler (Lig + Rölanti)
+    4. Dakikaya göre modül seç ve çağır (DISPATCHER)
+    5. Sinyal kontrolü ve puan barajı
+    6. Mesaj oluşturma (AI analizi ile)
     
     Modüller:
     - IYGolModule: 15-40 dk, İlk yarı gol sinyali
     - IY2Module: 46-65 ve 76-90 dk, İkinci yarı sinyali
     - EvDepGolModule: 20-80 dk, Ev/Dep gol sinyali (AH gerekli)
+    
+    Global Filtreler:
+    - Lig Filtresi: Whitelist/Blacklist kontrolü
+    - Rölanti Filtresi: Skor farkı >= 3 ise elenir
     """
     try:
         logger.info(f"🔍 Analiz: {ev_adi} vs {dep_adi} - {dk}'")
@@ -1831,7 +1837,25 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
         logger.info(f"✅ Veri kalitesi kontrolü başarılı")
         
         # ----------------------------------------------------------------
-        # 3. DISPATCHER: DAKİKAYA GÖRE MODÜL SEÇ VE ÇAĞIR
+        # 3. GLOBAL FİLTRELER (Dispatcher'dan önce)
+        # ----------------------------------------------------------------
+        logger.info(f"🔍 Global filtreler kontrol ediliyor...")
+        
+        # 3.1. LİG FİLTRESİ
+        lig_uygun, lig_sebep = LeagueFilter.check_league(league_name, ev_adi, dep_adi)
+        if not lig_uygun:
+            logger.warning(f"❌ ELENDİ: Lig Filtresi - {lig_sebep}")
+            return None
+        logger.info(f"✅ Lig filtresi geçti")
+        
+        # 3.2. RÖLANTİ FİLTRESİ (Skor farkı >= 3)
+        if abs(ev_gol - dep_gol) >= 3:
+            logger.warning(f"❌ ELENDİ: Rölanti Evresi (Skor farkı: {abs(ev_gol - dep_gol)} >= 3)")
+            return None
+        logger.info(f"✅ Rölanti filtresi geçti (Skor farkı: {abs(ev_gol - dep_gol)})")
+        
+        # ----------------------------------------------------------------
+        # 4. DISPATCHER: DAKİKAYA GÖRE MODÜL SEÇ VE ÇAĞIR
         # ----------------------------------------------------------------
         logger.info(f"🎯 DISPATCHER: Dakika {dk}' için modül seçiliyor...")
         
@@ -1871,7 +1895,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
             return None
         
         # ----------------------------------------------------------------
-        # 4. SİNYAL KONTROLÜ VE MESAJ OLUŞTURMA
+        # 5. SİNYAL KONTROLÜ VE PUAN BARAJI
         # ----------------------------------------------------------------
         if not sinyal or not sinyal.valid:
             if sinyal:
@@ -1895,7 +1919,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk, bot, session, ev
         logger.info(f"🎉 SİNYAL BARAJDAN GEÇTİ! Puan: {sinyal.score:.1f} >= {PUAN_BARAJI}")
         
         # ----------------------------------------------------------------
-        # 5. MESAJ OLUŞTURMA (AI Analizi ile)
+        # 6. MESAJ OLUŞTURMA (AI Analizi ile)
         # ----------------------------------------------------------------
         logger.info(f"📝 Mesaj oluşturuluyor...")
         
