@@ -186,7 +186,7 @@ arsiv_filtresi = ArsivFiltresi()
 #       xT_proxy = (SOT/DA) × (DA/TA) × game_state_weight × pressure_wave
 #       Şut konumu olmadan xT yaklaşımı
 #
-# [R3] F_pressure Endeksi (Corner + Attack Deficit Arbitrage)
+# [R3] F\_pressure Endeksi (Corner + Attack Deficit Arbitrage)
 #       F = (ΔKorner_10dk / (ΔSOT_10dk + 1)) × skor_carpan
 #       Eşik aşılırsa → sahte baskı + arbitraj fırsatı
 #
@@ -742,7 +742,7 @@ def proxy_xt_hesapla(sot: int, da: int, ta: int, korner: int,
 
 
 # ============================================================================
-# [R3] F_PRESSURE ENDEKSİ (Corner + Attack Deficit Arbitrage)
+# [R3] F\_PRESSURE ENDEKSİ (Corner + Attack Deficit Arbitrage)
 # ============================================================================
 
 def fpressure_endeks_hesapla(korner: int, sot: int, da: int,
@@ -753,7 +753,7 @@ def fpressure_endeks_hesapla(korner: int, sot: int, da: int,
                               onceki_da: int = 0) -> Tuple[float, bool, str]:
     """
     [R3] Sahte baskı endeksi.
-    F_pressure = (ΔKorner_10dk / (ΔSOT_10dk + 1)) × skor_carpan
+    F\_pressure = (ΔKorner_10dk / (ΔSOT_10dk + 1)) × skor_carpan
 
     skor_carpan: gerideyse 1.5 (panik), beraberese 1.0, öndeyse 0.8
     F > 2.5 → sahte baskı + arbitraj fırsatı
@@ -777,7 +777,7 @@ def fpressure_endeks_hesapla(korner: int, sot: int, da: int,
         f = max(f, 2.8)   # minimum sahte baskı seviyesi
 
     sahte = f > 2.5
-    mesaj = (f"F_PRESSURE={f:.2f} → {'SAHTE BASKI ⚠️' if sahte else 'Normal'} "
+    mesaj = (f"F\_PRESSURE={f:.2f} → {'SAHTE BASKI ⚠️' if sahte else 'Normal'} "
              f"(ΔKorner:{delta_korner}, ΔSOT:{delta_sot})")
     return round(f, 3), sahte, mesaj
 
@@ -1899,7 +1899,7 @@ async def ana_dongu():
                 "*V52 yeni (Kantitatif Algoritmik Raporu):*\n"
                 "🆕 [R1] AH Velocity + Acceleration + Momentum\n"
                 "🆕 [R2] Proxy xT Score (xT upgrade)\n"
-                "🆕 [R3] F_pressure Endeksi (Corner arbitraj)\n"
+                "🆕 [R3] F\_pressure Endeksi (Corner arbitraj)\n"
                 "🆕 [R4] Pressure Wave Cluster\n"
                 "🆕 [R5] Game State Weight\n"
                 "🆕 [R6] Shannon Entropisi (15dk pencere)\n"
