@@ -6,6 +6,171 @@ from typing import Optional, Dict, List, Tuple
 from collections import deque
 
 # ============================================================================
+# [ARSIV] 1.048.550 MAÇ ARŞİV FİLTRE MODÜLÜ — Doğrudan entegre
+# ============================================================================
+
+@dataclass
+class ArsivFiltreGirdisi:
+    iy_ev_gol:     int
+    iy_dep_gol:    int
+    iy_sonuc:      str    # '1', '0', '2'
+    kg:            str    # 'VAR', 'YOK'
+    tc:            str    # 'TEK', 'ÇİFT'
+    kp_1:          float
+    kp_x:          float
+    kp_2:          float
+    deg_1:         float
+    iy_toplam_gol: int
+
+
+@dataclass
+class ArsivFiltreKararı:
+    aksiyon:      str    # 'GUCLENDIR','ZAYIFLAT','BLOKE','NOTR'
+    puan_degisim: float
+    oran:         float  # arşiv başarı oranı
+    n:            int
+    filtre_adi:   str
+    aciklama:     str
+
+
+class ArsivFiltresi:
+    """
+    [ARSIV-FILTRE] 1.048.550 maç arşivinden türetilmiş 2. filtrasyon katmanı.
+    Train/test doğrulamasından geçmiş (fark < 1pp), 2017-2026 arası stabil.
+
+    En güçlü 10 filtre (lift sırasıyla):
+    1. İY=0+TC=ÇİFT+KG=YOK → ALT15   lift:2.62  n:120,993  %64.7
+    2. İY≥2+TC=ÇİFT+KG=VAR → ÜST35   lift:2.61  n:138,981  %83.9
+    3. İY=0+KG=YOK → ALT25            lift:1.98  n:238,170  %92.9
+    4. İY=2 → MS=2                    lift:2.29  n:265,659  %72.7
+    5. İY=2+DEG_POS → MS=2            lift:2.30  n: 27,278  %72.9
+    6. KG=VAR+İY≥2 → ÜST35           lift:2.18  n:282,773  %70.0
+    7. İY=1+DEG_NEG → MS=1            lift:1.97  n: 57,688  %87.0
+    8. İY=1 → MS=1                    lift:1.81  n:352,041  %80.2
+    9. TC=ÇİFT+KG=YOK → ALT25        lift:1.76  n:240,115  %82.5
+   10. İY_GOLSUZ → ALT25              lift:1.73  n:316,465  %81.1
+    """
+
+    @staticmethod
+    def filtrele(girdi: ArsivFiltreGirdisi,
+                 sinyal_tipi: str) -> ArsivFiltreKararı:
+        iy  = str(girdi.iy_sonuc).strip()
+        kg  = str(girdi.kg).strip().upper()
+        tc  = str(girdi.tc).strip().upper()
+        dg  = girdi.deg_1
+        kp1 = girdi.kp_1
+        ig  = girdi.iy_toplam_gol
+
+        # ── EV_GOL / IY_GOL / IY2_GOL ──────────────────────────────────
+        if sinyal_tipi in ('EV_GOL', 'IY_GOL', 'IY2_GOL'):
+            if iy == '1':
+                if dg is not None and dg < -0.05:
+                    return ArsivFiltreKararı('GUCLENDIR', +4.0, 86.99, 57688,
+                        'IY1_DEG_NEG_MS1',
+                        f"ARŞİV %87.0 | İY=1+Oran↓({dg:+.3f}) — Sharp money ev'de")
+                elif kp1 is not None and kp1 < 0.20 and kg == 'VAR':
+                    return ArsivFiltreKararı('GUCLENDIR', +2.0, 77.62, 35792,
+                        'IY1_KP_DUSUK_KG',
+                        "ARŞİV %77.6 | İY=1+KP<0.20+KG=VAR — Güçlü favori")
+                else:
+                    return ArsivFiltreKararı('GUCLENDIR', +2.5, 80.17, 352041,
+                        'IY1_MS1',
+                        "ARŞİV %80.2 | İY=1→MS=1 temel güvenilir sinyal")
+            elif iy == '0':
+                return ArsivFiltreKararı('ZAYIFLAT', -2.0, 36.13, 430849,
+                    'IY0_EV_RISK',
+                    "ARŞİV %36.1 | İY=0 → EV GOL riski, beraberlik/dep daha olası")
+            elif iy == '2':
+                return ArsivFiltreKararı('BLOKE', -5.0, 9.70, 265659,
+                    'IY2_EV_BLOKE',
+                    "ARŞİV %9.7 | İY=2 → EV GOL çok düşük — BLOKE")
+
+        # ── DEP_GOL ─────────────────────────────────────────────────────
+        elif sinyal_tipi == 'DEP_GOL':
+            if iy == '2':
+                if dg is not None and dg > 0.05:
+                    return ArsivFiltreKararı('GUCLENDIR', +2.5, 72.94, 27278,
+                        'IY2_DEG_POS_MS2',
+                        f"ARŞİV %72.9 | İY=2+Oran↑({dg:+.3f}) — Piyasa dep'i onaylıyor")
+                elif kg == 'VAR':
+                    return ArsivFiltreKararı('ZAYIFLAT', -1.5, 54.31, 158955,
+                        'IY2_KG_VAR_UYARI',
+                        "ARŞİV %54.3 | İY=2+KG=VAR — Gol gelir ama MS=2 belirsiz ⚠️")
+                else:
+                    return ArsivFiltreKararı('GUCLENDIR', +2.0, 72.66, 265659,
+                        'IY2_MS2',
+                        "ARŞİV %72.7 | İY=2→MS=2 temel DEP sinyali")
+            elif iy == '1':
+                return ArsivFiltreKararı('BLOKE', -5.0, 6.13, 352041,
+                    'IY1_DEP_BLOKE',
+                    "ARŞİV %6.1 | İY=1 → DEP GOL imkansız — BLOKE")
+
+        # ── ÜST 3.5 ─────────────────────────────────────────────────────
+        elif sinyal_tipi in ('UST35', 'IY2_GOL_UST'):
+            if ig >= 2 and tc == 'ÇİFT' and kg == 'VAR':
+                return ArsivFiltreKararı('GUCLENDIR', +5.0, 83.93, 138981,
+                    'IYGOL2_TC_CIFT_KG_VAR',
+                    "ARŞİV %83.9 | İY≥2+ÇİFT+KG=VAR — EN GÜÇLÜ ÜST35")
+            elif ig >= 2 and kg == 'VAR':
+                return ArsivFiltreKararı('GUCLENDIR', +3.5, 70.02, 282773,
+                    'KG_VAR_IYGOL2',
+                    "ARŞİV %70.0 | KG=VAR+İY≥2 — Güçlü ÜST35")
+            elif ig < 2:
+                return ArsivFiltreKararı('ZAYIFLAT', -2.0, 45.0, 0,
+                    'DUSUK_IY_GOL',
+                    f"ARŞİV: İY gol {ig} — ÜST35 momentum yetersiz")
+
+        # ── ALT 2.5 ─────────────────────────────────────────────────────
+        elif sinyal_tipi == 'ALT25':
+            if iy == '0' and kg == 'YOK':
+                return ArsivFiltreKararı('GUCLENDIR', +5.5, 92.96, 238170,
+                    'IY0_KG_YOK_ALT25',
+                    "ARŞİV %92.9 | İY=0+KG=YOK — EN GÜÇLÜ ALT25")
+            elif tc == 'ÇİFT' and kg == 'YOK':
+                return ArsivFiltreKararı('GUCLENDIR', +4.0, 82.51, 240115,
+                    'TC_CIFT_KG_YOK_ALT25',
+                    "ARŞİV %82.5 | TC=ÇİFT+KG=YOK — Çok güvenilir ALT25")
+            elif ig == 0:
+                return ArsivFiltreKararı('GUCLENDIR', +3.5, 81.12, 316465,
+                    'IYGOLSUZ_ALT25',
+                    "ARŞİV %81.1 | İY Golsüz — ALT25 güçlü")
+            elif kg == 'YOK':
+                return ArsivFiltreKararı('GUCLENDIR', +2.5, 74.59, 507134,
+                    'KG_YOK_ALT25',
+                    "ARŞİV %74.6 | KG=YOK — ALT25 destekleniyor")
+            elif tc == 'ÇİFT' and kg == 'VAR':
+                return ArsivFiltreKararı('ZAYIFLAT', -2.0, 40.66, 525745,
+                    'TC_CIFT_KG_VAR_TRAP',
+                    "⚠️ ARŞİV TRAP: TC=ÇİFT+KG=VAR → ALT25 DEĞİL, ÜST yönelimi!")
+
+        # ── ALT 1.5 ─────────────────────────────────────────────────────
+        elif sinyal_tipi == 'ALT15':
+            if iy == '0' and tc == 'ÇİFT' and kg == 'YOK':
+                return ArsivFiltreKararı('GUCLENDIR', +5.0, 64.69, 120993,
+                    'IY0_TC_CIFT_KG_YOK_ALT15',
+                    "ARŞİV %64.7 | İY=0+ÇİFT+KG=YOK — Güçlü ALT15")
+            elif ig > 0:
+                return ArsivFiltreKararı('BLOKE', -6.0, 8.0, 0,
+                    'IY_GOL_ALT15_BLOKE',
+                    f"ARŞİV BLOKE: İY'de {ig} gol var — ALT15 imkansız")
+
+        return ArsivFiltreKararı('NOTR', 0.0, 0.0, 0, 'ESLESMEDI',
+                                  "Arşiv filtresi eşleşmedi")
+
+    @staticmethod
+    def puan_uygula(mevcut: float, karar: ArsivFiltreKararı,
+                    max_boost: float = 8.0) -> float:
+        if karar.aksiyon == 'BLOKE':
+            return max(0.0, mevcut + karar.puan_degisim)
+        elif karar.aksiyon in ('GUCLENDIR', 'ZAYIFLAT'):
+            d = max(-max_boost, min(max_boost, karar.puan_degisim))
+            return round(mevcut + d, 2)
+        return mevcut
+
+
+arsiv_filtresi = ArsivFiltresi()
+
+# ============================================================================
 # BOT V52 — TAM ENTEGRASYONu (V51 + Kantitatif Algoritmik Ticaret Raporu)
 # ============================================================================
 # V51 korunanlar (23 düzeltme/özellik): Tümü korundu.
@@ -21,7 +186,7 @@ from collections import deque
 #       xT_proxy = (SOT/DA) × (DA/TA) × game_state_weight × pressure_wave
 #       Şut konumu olmadan xT yaklaşımı
 #
-# [R3] F\_pressure Endeksi (Corner + Attack Deficit Arbitrage)
+# [R3] F_pressure Endeksi (Corner + Attack Deficit Arbitrage)
 #       F = (ΔKorner_10dk / (ΔSOT_10dk + 1)) × skor_carpan
 #       Eşik aşılırsa → sahte baskı + arbitraj fırsatı
 #
@@ -612,7 +777,7 @@ def fpressure_endeks_hesapla(korner: int, sot: int, da: int,
         f = max(f, 2.8)   # minimum sahte baskı seviyesi
 
     sahte = f > 2.5
-    mesaj = (f"F\_PRESSURE={f:.2f} → {'SAHTE BASKI ⚠️' if sahte else 'Normal'} "
+    mesaj = (f"F_PRESSURE={f:.2f} → {'SAHTE BASKI ⚠️' if sahte else 'Normal'} "
              f"(ΔKorner:{delta_korner}, ΔSOT:{delta_sot})")
     return round(f, 3), sahte, mesaj
 
@@ -849,11 +1014,11 @@ def skor_durumu_kontrol(ev_gol: int,
 # ============================================================================
 
 class SignalType(Enum):
-    IY_GOL  = "İY GOL"
-    EV_GOL  = "EV GOL"
-    DEP_GOL = "DEP GOL"
-    IY2_GOL = "İY2 GOL"
-    IY2_GEC = "İY2 GEÇ"
+    IY_GOL  = "İY_GOL"
+    EV_GOL  = "EV_GOL"
+    DEP_GOL = "DEP_GOL"
+    IY2_GOL = "İY2_GOL"
+    IY2_GEC = "İY2_GEC"
 
 
 @dataclass
@@ -958,9 +1123,9 @@ class EvDepGolModule:
         else:
             # [AH-5] Corner deficit Signal Beta
             corner_deficit_home = (home.korner < away.korner
-                                   and abs(ah_home) <= 0.50 and home.sot >= away.sot)
+                                   and abs(ah_home) <= 0.50)
             corner_deficit_away = (away.korner < home.korner
-                                   and abs(ah_away) <= 0.50 and away.sot >= home.sot)
+                                   and abs(ah_away) <= 0.50)
             if corner_deficit_home or corner_deficit_away:
                 dom = "HOME" if corner_deficit_home else "AWAY"
                 dom_stats = home if dom == "HOME" else away
@@ -1488,6 +1653,53 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
         sinyal = SinyalKonsensus.sec(sinyaller)
         if not sinyal: return None
 
+        # ════════════════════════════════════════════════════════════════
+        # [ARSIV] 2. FİLTRASYON — 1.048.550 maç arşivi çapraz doğrulaması
+        # ════════════════════════════════════════════════════════════════
+        # İY sonucunu belirle
+        if ev_gol > dep_gol:   iy_son = '1'
+        elif ev_gol < dep_gol: iy_son = '2'
+        else:                  iy_son = '0'
+
+        kg_proxy = 'VAR' if toplam_gol >= 2 else ('YOK' if toplam_gol == 0 else 'BELIRSIZ')
+        tc_proxy = 'ÇİFT' if toplam_gol % 2 == 0 else 'TEK'
+
+        ah_kin = ah_hareket.kinetik_hesapla(event_id or '', 0, abs(ev_gol - dep_gol), dk)
+        deg_proxy = ah_kin.velocity * (-1)
+
+        arsiv_girdi = ArsivFiltreGirdisi(
+            iy_ev_gol=ev_gol, iy_dep_gol=dep_gol,
+            iy_sonuc=iy_son, kg=kg_proxy, tc=tc_proxy,
+            kp_1=0.0, kp_x=0.0, kp_2=0.0,
+            deg_1=deg_proxy,
+            iy_toplam_gol=toplam_gol
+        )
+
+        _tip_map = {
+            SignalType.EV_GOL:  'EV_GOL',
+            SignalType.IY_GOL:  'IY_GOL',
+            SignalType.DEP_GOL: 'DEP_GOL',
+            SignalType.IY2_GOL: 'UST35',
+            SignalType.IY2_GEC: 'UST35',
+        }
+        arsiv_tipi  = _tip_map.get(sinyal.signal_type, 'NOTR')
+        arsiv_karar = arsiv_filtresi.filtrele(arsiv_girdi, arsiv_tipi)
+
+        if arsiv_karar.aksiyon == 'BLOKE':
+            puan_s = arsiv_filtresi.puan_uygula(sinyal.score, arsiv_karar)
+            if puan_s <= 0:
+                logger.debug(f"ARŞİV BLOKE: {ev_adi} | {arsiv_karar.aciklama}")
+                return None
+            sinyal.score  = puan_s
+            sinyal.reason += " | ⛔ARŞİV_BLOKE"
+        else:
+            sinyal.score = arsiv_filtresi.puan_uygula(sinyal.score, arsiv_karar)
+            if arsiv_karar.aksiyon == 'GUCLENDIR':
+                sinyal.reason += f" | 📚✅{arsiv_karar.filtre_adi}(%{arsiv_karar.oran:.0f},n={arsiv_karar.n//1000}k)"
+            elif arsiv_karar.aksiyon == 'ZAYIFLAT':
+                sinyal.reason += f" | 📚⚠️{arsiv_karar.filtre_adi}"
+        # ════════════════════════════════════════════════════════════════
+
         # Skor bonusu + lig çarpanı
         sinyal.score = round(sinyal.score + skor_bonus, 2)
         if skor_bonus != 0:
@@ -1537,10 +1749,10 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
         if details.get('xt') is not None:
             detail_str += f"• Proxy xT: {details['xt']:.3f}\n"
         if details.get('fpressure') is not None:
-            detail_str += f"• F\_pressure: {details['fpressure']:.2f}\n"
+            detail_str += f"• F_pressure: {details['fpressure']:.2f}\n"
         if details.get('ah_velocity') is not None:
             detail_str += f"• AH Velocity: {details['ah_velocity']:+.4f}\n"
-            sinyal.reason = sinyal.reason.replace("_", "\\_")
+
         mesaj = (
             f"💎 *SİNYAL — Puan: {sinyal.score:.1f}*\n"
             f"⚽ {ev_adi} {skor} {dep_adi}\n"
@@ -1687,7 +1899,7 @@ async def ana_dongu():
                 "*V52 yeni (Kantitatif Algoritmik Raporu):*\n"
                 "🆕 [R1] AH Velocity + Acceleration + Momentum\n"
                 "🆕 [R2] Proxy xT Score (xT upgrade)\n"
-                "🆕 [R3] F\_pressure Endeksi (Corner arbitraj)\n"
+                "🆕 [R3] F_pressure Endeksi (Corner arbitraj)\n"
                 "🆕 [R4] Pressure Wave Cluster\n"
                 "🆕 [R5] Game State Weight\n"
                 "🆕 [R6] Shannon Entropisi (15dk pencere)\n"
