@@ -1540,7 +1540,10 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
             detail_str += f"• F\_pressure: {details['fpressure']:.2f}\n"
         if details.get('ah_velocity') is not None:
             detail_str += f"• AH Velocity: {details['ah_velocity']:+.4f}\n"
-
+            sinyal.reason = sinyal.reason.replace("_", "\\_")
+        mesaj = (
+            f"💎 *SİNYAL — Puan: {sinyal.score:.1f}*\n"
+            f"⚽ {ev_adi} {skor} {dep_adi}\n"
         mesaj = (
             f"💎 *SİNYAL — Puan: {sinyal.score:.1f}*\n"
             f"⚽ {ev_adi} {skor} {dep_adi}\n"
