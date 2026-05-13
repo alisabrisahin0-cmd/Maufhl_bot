@@ -1687,7 +1687,7 @@ async def ana_dongu():
                 "*V52 yeni (Kantitatif Algoritmik Raporu):*\n"
                 "🆕 [R1] AH Velocity + Acceleration + Momentum\n"
                 "🆕 [R2] Proxy xT Score (xT upgrade)\n"
-                "🆕 [R3] F_pressure Endeksi (Corner arbitraj)\n"
+                "🆕 [R3] F\_pressure Endeksi (Corner arbitraj)\n"
                 "🆕 [R4] Pressure Wave Cluster\n"
                 "🆕 [R5] Game State Weight\n"
                 "🆕 [R6] Shannon Entropisi (15dk pencere)\n"
