@@ -1544,9 +1544,6 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
         mesaj = (
             f"💎 *SİNYAL — Puan: {sinyal.score:.1f}*\n"
             f"⚽ {ev_adi} {skor} {dep_adi}\n"
-        mesaj = (
-            f"💎 *SİNYAL — Puan: {sinyal.score:.1f}*\n"
-            f"⚽ {ev_adi} {skor} {dep_adi}\n"
             f"🏆 {league_name}\n"
             f"⏱ {dk}' | 🎯 {sinyal.signal_type.value}\n"
             f"{'─'*30}\n"
