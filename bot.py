@@ -958,9 +958,9 @@ class EvDepGolModule:
         else:
             # [AH-5] Corner deficit Signal Beta
             corner_deficit_home = (home.korner < away.korner
-                                   and abs(ah_home) <= 0.50)
+                                   and abs(ah_home) <= 0.50 and home.sot >= away.so)
             corner_deficit_away = (away.korner < home.korner
-                                   and abs(ah_away) <= 0.50)
+                                   and abs(ah_away) <= 0.50 and home.sot >= away.so)
             if corner_deficit_home or corner_deficit_away:
                 dom = "HOME" if corner_deficit_home else "AWAY"
                 dom_stats = home if dom == "HOME" else away
