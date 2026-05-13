@@ -849,11 +849,11 @@ def skor_durumu_kontrol(ev_gol: int,
 # ============================================================================
 
 class SignalType(Enum):
-    IY_GOL  = "İY_GOL"
-    EV_GOL  = "EV_GOL"
-    DEP_GOL = "DEP_GOL"
-    IY2_GOL = "İY2_GOL"
-    IY2_GEC = "İY2_GEC"
+    IY_GOL  = "İY GOL"
+    EV_GOL  = "EV GOL"
+    DEP_GOL = "DEP GOL"
+    IY2_GOL = "İY2 GOL"
+    IY2_GEC = "İY2 GEÇ"
 
 
 @dataclass
