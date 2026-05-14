@@ -11,46 +11,14 @@ from collections import deque
 
 @dataclass
 class ArsivFiltreGirdisi:
-    iy_ev_gol:     int
-    iy_dep_gol:    int
-    iy_sonuc:      str    # '1', '0', '2'
-    kg:            str    # 'VAR', 'YOK'
-    tc:            str    # 'TEK', 'ÇİFT'
-    kp_1:          float
-    kp_x:          float
-    kp_2:          float
-    deg_1:         float
-    iy_toplam_gol: int
-
+   
 
 @dataclass
 class ArsivFiltreKararı:
-    aksiyon:      str    # 'GUCLENDIR','ZAYIFLAT','BLOKE','NOTR'
-    puan_degisim: float
-    oran:         float  # arşiv başarı oranı
-    n:            int
-    filtre_adi:   str
-    aciklama:     str
-
+   
 
 class ArsivFiltresi:
-    """
-    [ARSIV-FILTRE] 1.048.550 maç arşivinden türetilmiş 2. filtrasyon katmanı.
-    Train/test doğrulamasından geçmiş (fark < 1pp), 2017-2026 arası stabil.
-
-    En güçlü 10 filtre (lift sırasıyla):
-    1. İY=0+TC=ÇİFT+KG=YOK → ALT15   lift:2.62  n:120,993  %64.7
-    2. İY≥2+TC=ÇİFT+KG=VAR → ÜST35   lift:2.61  n:138,981  %83.9
-    3. İY=0+KG=YOK → ALT25            lift:1.98  n:238,170  %92.9
-    4. İY=2 → MS=2                    lift:2.29  n:265,659  %72.7
-    5. İY=2+DEG_POS → MS=2            lift:2.30  n: 27,278  %72.9
-    6. KG=VAR+İY≥2 → ÜST35           lift:2.18  n:282,773  %70.0
-    7. İY=1+DEG_NEG → MS=1            lift:1.97  n: 57,688  %87.0
-    8. İY=1 → MS=1                    lift:1.81  n:352,041  %80.2
-    9. TC=ÇİFT+KG=YOK → ALT25        lift:1.76  n:240,115  %82.5
-   10. İY_GOLSUZ → ALT25              lift:1.73  n:316,465  %81.1
-    """
-
+  
     @staticmethod
     def filtrele(girdi: ArsivFiltreGirdisi,
                  sinyal_tipi: str) -> ArsivFiltreKararı:
@@ -1585,7 +1553,6 @@ async def asian_handicap_cek(event_id: str,
 # ============================================================================
 # ANA ANALİZ MOTORU
 # ============================================================================
-
 async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                         bot, session,
                         event_id: str = "",
@@ -1606,126 +1573,126 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
         ta  = home_stats.ta  + away_stats.ta
         da  = home_stats.da  + away_stats.da
         sot = home_stats.sot + away_stats.sot
+        
+        # =================================================================
+        # 🛡️ 1. İPTAL KALKANLARI (KASAYI KORUYAN ZEHİR FİLTRELERİ)
+        # =================================================================
+        
+        # KALKAN 1: Kırmızı Kart İptali (Sistem başarısını %85'ten %80'e düşürüyordu)
+        ev_kirmizi = guvenli_int(v.get('ev_kirmizi_kart', 0))
+        dep_kirmizi = guvenli_int(v.get('dep_kirmizi_kart', 0))
+        if ev_kirmizi > 0 or dep_kirmizi > 0:
+            logger.info(f"⛔ İPTAL: Kırmızı Kart Var ({ev_adi} - {dep_adi})")
+            return None
 
-        # Veri kalitesi
+        # KALKAN 2: Kara Liste Ligler (Sistemin %76'lara kadar çöktüğü ligler)
+        kara_liste = ['italy serie d', 'england premier league', 'france national 2', 'czechia 3. liga', 'guatemala segunda']
+        if any(l in league_name.lower() for l in kara_liste):
+            logger.info(f"⛔ İPTAL: Kara Liste Lig ({league_name})")
+            return None
+
+        # Veri kalitesi ve Temel Filtreler
         ok, errs = MatchDataProtection.validate_match_data(home_stats, away_stats)
         if not ok: return None
 
-        # Filtreler
         lig_ok, _ = LeagueFilter.check_league(league_name, ev_adi, dep_adi)
         if not lig_ok: return None
         if LeagueFilter.is_karantina(league_name): return None
+        
+        # Maç koptuysa (3 fark) girme
         if abs(ev_gol - dep_gol) >= 3: return None
-
-        skor_ok, skor_d, skor_bonus = skor_durumu_kontrol(ev_gol, dep_gol)
-        if not skor_ok: return None
 
         # [R6] Entropi güncellemesi
         if event_id:
-            mac_entropisi.olay_ekle(event_id, dk, da, sot,
-                                     home_stats.korner + away_stats.korner)
+            mac_entropisi.olay_ekle(event_id, dk, da, sot, home_stats.korner + away_stats.korner)
 
-        # Modülleri çalıştır
+        # Temel Modülleri Çalıştır
         sinyaller: List[SignalResult] = []
 
         if 15 <= dk <= 40:
-            s = IYGolModule.check(dk, ev_gol, dep_gol,
-                                  home_stats, away_stats, league_name, event_id)
+            s = IYGolModule.check(dk, ev_gol, dep_gol, home_stats, away_stats, league_name, event_id)
             sinyaller.append(s)
 
         if (46 <= dk <= 65) or (76 <= dk <= 90):
-            s = IY2Module.check(dk, home_stats, away_stats,
-                                ev_gol, dep_gol, league_name, event_id)
+            s = IY2Module.check(dk, home_stats, away_stats, ev_gol, dep_gol, league_name, event_id)
             sinyaller.append(s)
 
+        # AH Verisi çekimi
+        ah_ev = ah_dep = 0.0
         if 20 <= dk <= 80 and event_id:
             ah_data = await asian_handicap_cek(event_id, session)
             if ah_data:
+                ah_ev = ah_data['ev_handicap']
                 market_odds = ah_data.get('ev_oran', 0.0)
                 s = EvDepGolModule.check(
                     dk, home_stats, away_stats,
                     ah_data['ev_handicap'], ah_data['dep_handicap'],
-                    league_name, event_id,
-                    ev_gol, dep_gol, market_odds
+                    league_name, event_id, ev_gol, dep_gol, market_odds
                 )
                 sinyaller.append(s)
 
         sinyal = SinyalKonsensus.sec(sinyaller)
         if not sinyal: return None
 
-        # ════════════════════════════════════════════════════════════════
-        # [ARSIV] 2. FİLTRASYON — 1.048.550 maç arşivi çapraz doğrulaması
-        # ════════════════════════════════════════════════════════════════
-        # İY sonucunu belirle
-        if ev_gol > dep_gol:   iy_son = '1'
-        elif ev_gol < dep_gol: iy_son = '2'
-        else:                  iy_son = '0'
+        # =================================================================
+        # 💎 2. ELMAS KURALLAR (KASAYI KATLAYAN VIP GİRİŞLER)
+        # =================================================================
+        skor_farki = ev_gol - dep_gol
+        toplam_korner = home_stats.korner + away_stats.korner
+        elmas_mesajlari = []
+        
+        # KALKAN 3: Ortasaha Kördüğümü Tuzağı (%68'lik kayıp bölgesi)
+        # 60 ile 75. dk arası, güçler denkse (AH -0.25 ile 0.25 arası) ve skor beraberlik veya tek farksa iptal et.
+        if 60 <= dk <= 75 and -0.25 <= ah_ev <= 0.25 and abs(skor_farki) <= 1:
+             logger.info(f"⛔ İPTAL: Ortasaha Kördüğümü Tuzağı ({ev_adi} - {dep_adi})")
+             return None
 
-        kg_proxy = 'VAR' if toplam_gol >= 2 else ('YOK' if toplam_gol == 0 else 'BELIRSIZ')
-        tc_proxy = 'ÇİFT' if toplam_gol % 2 == 0 else 'TEK'
+        # 💎 ELMAS 1: Kusursuz Şok (%96.5 Win Rate)
+        if 15 <= dk <= 30 and toplam_korner <= 4:
+            if (ah_ev <= -0.75 and skor_farki < 0) or (ah_ev >= 0.75 and skor_farki > 0):
+                sinyal.score += 8.0
+                elmas_mesajlari.append("💎 Kusursuz Şok (Erken Yenik Ağır Favori)")
 
-        ah_kin = ah_hareket.kinetik_hesapla(event_id or '', 0, abs(ev_gol - dep_gol), dk)
-        deg_proxy = ah_kin.velocity * (-1)
+        # 💎 ELMAS 2: Gizli Boğulma / Korner Baskısı (%87.1 Win Rate)
+        if (ah_ev <= -0.25 and skor_farki < 0 and (home_stats.korner - away_stats.korner) >= 3) or \
+           (ah_ev >= 0.25 and skor_farki > 0 and (away_stats.korner - home_stats.korner) >= 3):
+            sinyal.score += 6.0
+            elmas_mesajlari.append("💎 Gizli Boğulma (Skorda Geride, Kornerde Eziyor)")
 
-        arsiv_girdi = ArsivFiltreGirdisi(
-            iy_ev_gol=ev_gol, iy_dep_gol=dep_gol,
-            iy_sonuc=iy_son, kg=kg_proxy, tc=tc_proxy,
-            kp_1=0.0, kp_x=0.0, kp_2=0.0,
-            deg_1=deg_proxy,
-            iy_toplam_gol=toplam_gol
-        )
+        # 💎 ELMAS 3: Altın Lig Çarpanı (Excel'den çıkan VIP ligler)
+        vip_leagues = ['wales championship south', 'thailand division 2', 'saudi arabia pro league', 'slovakia 3. liga', 'hong kong 1st division', 'austria landesliga']
+        if any(l in league_name.lower() for l in vip_leagues):
+            sinyal.score = round(sinyal.score * 1.5, 2)
+            elmas_mesajlari.append(f"⭐ ALTIN LİG ÇARPANI")
+            
+        # ⚠️ İLK YARI BERABERLİK SENDROMU (Güven Düşürücü)
+        # Maç 45'i geçmiş ve maçta henüz denge bozulmamışsa (beraberlikse) riski azalt.
+        if dk > 45 and ev_gol == dep_gol:
+            sinyal.score -= 2.0
+            elmas_mesajlari.append("⚠️ Beraberlik Sendromu (Riskli)")
+        # =================================================================
 
-        _tip_map = {
-            SignalType.EV_GOL:  'EV_GOL',
-            SignalType.IY_GOL:  'IY_GOL',
-            SignalType.DEP_GOL: 'DEP_GOL',
-            SignalType.IY2_GOL: 'UST35',
-            SignalType.IY2_GEC: 'UST35',
-        }
-        arsiv_tipi  = _tip_map.get(sinyal.signal_type, 'NOTR')
-        arsiv_karar = arsiv_filtresi.filtrele(arsiv_girdi, arsiv_tipi)
-
-        if arsiv_karar.aksiyon == 'BLOKE':
-            puan_s = arsiv_filtresi.puan_uygula(sinyal.score, arsiv_karar)
-            if puan_s <= 0:
-                logger.debug(f"ARŞİV BLOKE: {ev_adi} | {arsiv_karar.aciklama}")
-                return None
-            sinyal.score  = puan_s
-            sinyal.reason += " | ⛔ARŞİV_BLOKE"
-        else:
-            sinyal.score = arsiv_filtresi.puan_uygula(sinyal.score, arsiv_karar)
-            if arsiv_karar.aksiyon == 'GUCLENDIR':
-                sinyal.reason += f" | 📚✅{arsiv_karar.filtre_adi}(%{arsiv_karar.oran:.0f},n={arsiv_karar.n//1000}k)"
-            elif arsiv_karar.aksiyon == 'ZAYIFLAT':
-                sinyal.reason += f" | 📚⚠️{arsiv_karar.filtre_adi}"
-        # ════════════════════════════════════════════════════════════════
-
-        # Skor bonusu + lig çarpanı
-        sinyal.score = round(sinyal.score + skor_bonus, 2)
-        if skor_bonus != 0:
-            sinyal.reason += f" | SKOR({skor_bonus:+.0f})"
-
+        # Lig çarpanını uygula (Eski sistem uyumluluğu)
         lig_c = LeagueFilter.get_league_multiplier(league_name)
-        sinyal.score = round(sinyal.score * lig_c, 2)
-        if lig_c != 1.0:
-            sinyal.reason += f" | LİG(×{lig_c})"
+        if not any(l in league_name.lower() for l in vip_leagues): # VIP değilse normal çarpanı ekle
+             sinyal.score = round(sinyal.score * lig_c, 2)
+             if lig_c != 1.0:
+                 sinyal.reason += f" | LİG(×{lig_c})"
 
-        # Puan barajı
+        # Elmas mesajlarını genel sebebe ekle
+        if elmas_mesajlari:
+            sinyal.reason += " | " + " | ".join(elmas_mesajlari)
+
+        # Puan barajı kontrolü
         if sinyal.score < puan_baraji_hesapla(dk, league_name): return None
 
         # Çift sinyal kontrolü
-        if event_id and sinyal_gecmisi.zaten_gonderildi_mi(
-                event_id, dk, sinyal.signal_type.value): return None
+        if event_id and sinyal_gecmisi.zaten_gonderildi_mi(event_id, dk, sinyal.signal_type.value): return None
 
         # [R6] Entropi özeti
-        entropi_val, entropi_msg = mac_entropisi.entropi_hesapla(
-            event_id or '', dk)
+        entropi_val, entropi_msg = mac_entropisi.entropi_hesapla(event_id or '', dk)
 
-        sinyal_logger.info(
-            f"{ev_adi} vs {dep_adi} | {dk}' | "
-            f"{sinyal.signal_type.value} | P:{sinyal.score:.1f} | "
-            f"H:{entropi_val:.2f} | {lig_c}x"
-        )
+        sinyal_logger.info(f"{ev_adi} vs {dep_adi} | {dk}' | {sinyal.signal_type.value} | P:{sinyal.score:.1f} | H:{entropi_val:.2f}")
 
         # AI analizi
         mac_v = {
@@ -1741,7 +1708,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
 
         nesine = nesine_lig_kontrolu(league_name, ev_adi, dep_adi)
 
-        # Detay satırları
+        # Detay satırları oluştur
         details = sinyal.details
         detail_str = ""
         if details.get('ah_split'):
@@ -1750,9 +1717,8 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
             detail_str += f"• Proxy xT: {details['xt']:.3f}\n"
         if details.get('fpressure') is not None:
             detail_str += f"• F_pressure: {details['fpressure']:.2f}\n"
-        if details.get('ah_velocity') is not None:
-            detail_str += f"• AH Velocity: {details['ah_velocity']:+.4f}\n"
 
+        # Telegram Mesajını Hazırla
         mesaj = (
             f"💎 *SİNYAL — Puan: {sinyal.score:.1f}*\n"
             f"⚽ {ev_adi} {skor} {dep_adi}\n"
@@ -1764,7 +1730,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
             f"• DA: {da} (E:{v['ev_da']}, D:{v['dep_da']})\n"
             f"• SOT: {sot} (E:{v['ev_sot']}, D:{v['dep_sot']})\n"
             f"• Gol: {toplam_gol} (E:{ev_gol}, D:{dep_gol})\n"
-            f"• Köşe: E:{v.get('ev_korner',0)}, D:{v.get('dep_korner',0)}\n"
+            f"• Köşe: E:{home_stats.korner}, D:{away_stats.korner}\n"
             f"• Entropi: {entropi_val:.2f} — {entropi_msg}\n"
             f"{detail_str}"
             f"{'─'*30}\n"
@@ -1780,6 +1746,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
         nesine_str = "✅ Nesine'de VAR" if nesine else "ℹ️ Nesine'de yok"
         mesaj += f"{'─'*30}\n{nesine_str}"
 
+        # Geçmişe kaydet
         if event_id:
             sinyal_gecmisi.kaydet(event_id, dk, sinyal.signal_type.value)
 
@@ -1789,11 +1756,6 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
         logger.error(f"mac_analiz_et:{e}")
         import traceback; logger.error(traceback.format_exc())
         return None
-
-
-# ============================================================================
-# MAÇ İŞLEME
-# ============================================================================
 
 async def mac_isle(bot, mac_data: dict,
                    session) -> Optional[str]:
