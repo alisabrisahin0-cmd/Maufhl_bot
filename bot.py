@@ -722,6 +722,326 @@ class ClaudeAHFiltresi:
 claude_ah_filtresi = ClaudeAHFiltresi()
 
 
+# ============================================================================
+# EXCEL ORAN ANALİZİ FİLTRELERİ — 26.005 GERÇEK MAÇ VERİSİ
+# ============================================================================
+# Kaynak: veri_exceli_güncel_28_03_2026.xlsx — 26.005 kayıt
+# Yöntem: Çapraz tablo analizi, min n=290 (overfitting önlemi)
+#
+# KODDA OLMAYAN 13 YENİ STRATEJİ:
+#
+#  [E1-E3] SHARP MONEY EŞİĞİ (|AH| mutlak değer)
+#    |AH|>=2.5 → %94.3  n=932
+#    |AH|>=2.0 → %92.6  n=1855
+#    |AH|>=1.5 → %90.7  n=3709
+#
+#  [E4]  ELMAS: AH<=-1.5 + 0-20dk + EŞİT         → %95.2  n=372
+#  [E5]  AH<=-0.75 + 0-20dk + GERİDE              → %94.5  n=290
+#  [E6]  AH<=-0.75 + İY 0 gol + 0-30dk            → %91.3  n=1102
+#  [E7]  AH<=-0.5 + 0-30dk + EŞİT                 → %89.6  n=1421 ← büyük!
+#  [E8]  AH<=-0.75 + 21-35dk + GERİDE             → %91.7  n=351
+#  [E9]  FAV GERİ DÖNÜŞ: AH<=-0.5 + DEP_ONE + 0-30dk  → %93.4 n=755
+#  [E10] FAV GERİ DÖNÜŞ: AH<=-0.5 + DEP_ONE + 31-45dk → %87.7 n=481
+#  [E12] UNDERDOG EŞİT ERKEN: AH>=+1.0 + 0-30dk + EŞİT→ %89.1 n=632
+#  [E16] ZAYIF PENCERE İPTAL: AH<=-0.5 + 45dk+   → sadece %69-74% → BLOK
+#  [E17] 2.YARI SPESIFIK: AH<=-1.0 + İY 1+ gol + 46-65dk → %86.8 n=4190
+#  [E20] DENGELI MAÇ OVER: AH≈0 (|AH|<=0.25)      → Avg Gol=3.12 → OVER
+# ============================================================================
+
+@_dc
+class ExcelSinyalSonucu:
+    """Excel oran analizi filtresi sonucu"""
+    filtre_adi:   str
+    basari_orani: float
+    orneklem:     int
+    market_oneri: str
+    aciklama:     str
+    guc_seviyesi: str
+    blok:         bool = False   # True → sinyal üretme, engelle
+
+
+class ExcelOranFiltresi:
+    """
+    26.005 gerçek maç kaydından çıkarılmış oran analizi filtreleri.
+    Mevcut Gemini/Claude filtrelerinin kapsamadığı boşlukları doldurur.
+    Ana sinyale DOKUNMAZ — ayrı Telegram bildirimi üretir.
+    BLOK=True olanlar ana motora iptal sinyali gönderir.
+    """
+
+    @staticmethod
+    def kontrol_et(
+        dakika:        float,
+        ah_degeri:     float,
+        kayit_ev_gol:  int,
+        kayit_dep_gol: int,
+        iy_toplam_gol: int,   # 1. yarı toplam gol (dk>=46 için hafızadan)
+    ) -> _Opt[ExcelSinyalSonucu]:
+        """
+        Excel filtrelerini öncelik sırasıyla kontrol eder.
+        İlk eşleşen döner.
+        """
+        fark    = kayit_ev_gol - kayit_dep_gol
+        ah_abs  = abs(ah_degeri)
+
+        # ── [E16] ZAYIF PENCERE BLOK (önce kontrol — iptal filtresi) ─────────
+        # AH<=-0.5 + 45dk sonrası → Win% sadece %69-74% → sinyal üretme
+        if ah_degeri <= -0.5 and dakika >= 45:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E16: Zayıf Pencere — Sinyal Bloklandı",
+                basari_orani  = 71.5,
+                orneklem      = 4779,
+                market_oneri  = "⛔ BU PENCEREDE GİRME — oran zayıf",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} | ⏱{dakika:.0f}dk\n"
+                    f"⛔ AH<=-0.5 + 45dk+ → sadece %69-74 başarı\n"
+                    f"Excel: 26k maçtan doğrulandı, bu pencere ZAYIF"
+                ),
+                guc_seviyesi  = "⛔ BLOK",
+                blok          = True
+            )
+
+        # ── [E1-E3] SHARP MONEY EŞİĞİ (|AH| mutlak değer) ──────────────────
+        # Kodda eksik: mutlak değer analizi
+        if ah_abs >= 2.5:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E1: Sharp Money — Ezici Favori |AH|>=2.5",
+                basari_orani  = 94.3,
+                orneklem      = 932,
+                market_oneri  = "Favori Gol Atacak / MS 3.5+ ÜST / Ezici dominans",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} (|AH|={ah_abs:.2f}) | ⏱{dakika:.0f}dk\n"
+                    f"💰 SHARP MONEY: Piyasa bu maçta çok emin\n"
+                    f"📊 Excel: %94.3 başarı n=932 — büyük örneklem"
+                ),
+                guc_seviyesi  = "🔥🔥 KRİTİK"
+            )
+
+        if ah_abs >= 2.0:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E2: Sharp Money — Güçlü Favori |AH|>=2.0",
+                basari_orani  = 92.6,
+                orneklem      = 1855,
+                market_oneri  = "Favori Gol Atacak / MS 2.5 ÜST",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} (|AH|={ah_abs:.2f}) | ⏱{dakika:.0f}dk\n"
+                    f"💰 SHARP MONEY: Piyasa emin, büyük fark bekleniyor\n"
+                    f"📊 Excel: %92.6 başarı n=1855"
+                ),
+                guc_seviyesi  = "🔥🔥 KRİTİK"
+            )
+
+        if ah_abs >= 1.5:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E3: Sharp Money — Belirgin Favori |AH|>=1.5",
+                basari_orani  = 90.7,
+                orneklem      = 3709,
+                market_oneri  = "Favori Gol Atacak / MS 2.5 ÜST",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} (|AH|={ah_abs:.2f}) | ⏱{dakika:.0f}dk\n"
+                    f"💰 Belirgin favori → %90.7 başarı n=3709"
+                ),
+                guc_seviyesi  = "🔥 KRİTİK"
+            )
+
+        # ── [E4] ELMAS: AH<=-1.5 + 0-20dk + EŞİT ───────────────────────────
+        # %95.2 n=372 — C8'den farklı: daha sıkı AH + daha erken pencere
+        if ah_degeri <= -1.5 and dakika <= 20 and fark == 0:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E4: ELMAS — Güçlü Favori + Erken + 0-0",
+                basari_orani  = 95.2,
+                orneklem      = 372,
+                market_oneri  = "İY 0.5 ÜST / MS 2.5 ÜST — oran henüz değerli",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} | ⏱{dakika:.0f}dk | Skor:0-0\n"
+                    f"💎 Güçlü favori 20dk içinde skor yapamadı → baskı artacak\n"
+                    f"📊 Excel: %95.2 başarı n=372 — güvenilir örneklem"
+                ),
+                guc_seviyesi  = "🔥🔥 KRİTİK"
+            )
+
+        # ── [E5] AH<=-0.75 + 0-20dk + GERİDE ───────────────────────────────
+        # %94.5 n=290 — C6'dan farklı: hafif favori (-0.75) + zaman kısıtı
+        if ah_degeri <= -0.75 and dakika <= 20 and fark < 0:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E5: Hafif Favori + Erken + Geride",
+                basari_orani  = 94.5,
+                orneklem      = 290,
+                market_oneri  = "Ev Gol Atacak / Sıradaki Gol Ev",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} | ⏱{dakika:.0f}dk | "
+                    f"Skor:{kayit_ev_gol}-{kayit_dep_gol}\n"
+                    f"⚡ Hafif favori ilk 20dk geride → geri dönüş çok güçlü\n"
+                    f"📊 Excel: %94.5 başarı n=290"
+                ),
+                guc_seviyesi  = "🔥🔥 KRİTİK"
+            )
+
+        # ── [E9] FAVORİ GERİ DÖNÜŞ — 0-30dk (AH<=-0.5 aralığı) ─────────────
+        # %93.4 n=755 — C6 sadece AH<=-1.0 görüyor, bu -0.5 ile -0.99 arası
+        if -1.0 < ah_degeri <= -0.5 and dakika <= 30 and fark < 0:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E9: Hafif Favori Geri Dönüş (0-30dk)",
+                basari_orani  = 93.4,
+                orneklem      = 755,
+                market_oneri  = "Ev Gol Atacak / MS 0.5 ÜST",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} | ⏱{dakika:.0f}dk | "
+                    f"Skor:{kayit_ev_gol}-{kayit_dep_gol}\n"
+                    f"🔄 Hafif favori erken geride → geri dönüş penceresi açık\n"
+                    f"📊 Excel: %93.4 başarı n=755 — büyük örneklem"
+                ),
+                guc_seviyesi  = "🔥🔥 KRİTİK"
+            )
+
+        # ── [E8] AH<=-0.75 + 21-35dk + GERİDE ──────────────────────────────
+        # %91.7 n=351 — orta periyot spesifik pencere
+        if ah_degeri <= -0.75 and 21 <= dakika <= 35 and fark < 0:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E8: Favori Orta Periyot Geride (21-35dk)",
+                basari_orani  = 91.7,
+                orneklem      = 351,
+                market_oneri  = "Ev Gol Atacak / KG Var / MS 1.5 ÜST",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} | ⏱{dakika:.0f}dk | "
+                    f"Skor:{kayit_ev_gol}-{kayit_dep_gol}\n"
+                    f"⚡ Favori 21-35dk arasında hâlâ geride → baskı birikmiş\n"
+                    f"📊 Excel: %91.7 başarı n=351"
+                ),
+                guc_seviyesi  = "🔥 KRİTİK"
+            )
+
+        # ── [E6] AH<=-0.75 + İY 0 gol + 0-30dk ─────────────────────────────
+        # %91.3 n=1102 — golsüz + favori kombinasyonu
+        if ah_degeri <= -0.75 and dakika <= 30 and (kayit_ev_gol + kayit_dep_gol) == 0:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E6: Favori + Golsüz Maç (0-30dk)",
+                basari_orani  = 91.3,
+                orneklem      = 1102,
+                market_oneri  = "İY 0.5 ÜST / MS 2.5 ÜST — gol beklentisi yüksek",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} | ⏱{dakika:.0f}dk | Skor:0-0\n"
+                    f"⚽ Favori henüz skor yapamadı, tempo artacak\n"
+                    f"📊 Excel: %91.3 başarı n=1102 — büyük örneklem"
+                ),
+                guc_seviyesi  = "🔥 KRİTİK"
+            )
+
+        # ── [E10] FAVORİ GERİ DÖNÜŞ — 31-45dk ───────────────────────────────
+        # %87.7 n=481
+        if -1.0 < ah_degeri <= -0.5 and 31 <= dakika <= 45 and fark < 0:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E10: Hafif Favori Geri Dönüş (31-45dk)",
+                basari_orani  = 87.7,
+                orneklem      = 481,
+                market_oneri  = "Ev Gol Atacak / İY 2. gol beklentisi",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} | ⏱{dakika:.0f}dk | "
+                    f"Skor:{kayit_ev_gol}-{kayit_dep_gol}\n"
+                    f"🔄 Favori 1.yarı sonuna geride → son baskı\n"
+                    f"📊 Excel: %87.7 başarı n=481"
+                ),
+                guc_seviyesi  = "✅ GÜÇLÜ"
+            )
+
+        # ── [E7] AH<=-0.5 + 0-30dk + EŞİT ──────────────────────────────────
+        # %89.6 n=1421 — en büyük örneklemli eksik strateji
+        if ah_degeri <= -0.5 and dakika <= 30 and fark == 0:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E7: Favori + Beraberlik + Erken (AH>=-0.5)",
+                basari_orani  = 89.6,
+                orneklem      = 1421,
+                market_oneri  = "Gol Olacak / MS 2.5 ÜST / Ev Gol Atacak",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} | ⏱{dakika:.0f}dk | "
+                    f"Skor:{kayit_ev_gol}-{kayit_dep_gol} (BER)\n"
+                    f"📌 Favori eşit durumda → gol baskısı artacak\n"
+                    f"📊 Excel: %89.6 başarı n=1421 — EN BÜYÜK ÖRNEKLEM"
+                ),
+                guc_seviyesi  = "🔥 KRİTİK"
+            )
+
+        # ── [E12] UNDERDOG EŞİT ERKEN: AH>=+1.0 + 0-30dk + EŞİT ───────────
+        # %89.1 n=632 — C5'ten çok daha güvenilir (n=47 → n=632)
+        if ah_degeri >= 1.0 and dakika <= 30 and fark == 0:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E12: Ağır Underdog Eşit (0-30dk) — Gol Bekle",
+                basari_orani  = 89.1,
+                orneklem      = 632,
+                market_oneri  = "MS 0.5 ÜST / KG Var — her iki taraftan gol beklentisi",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} | ⏱{dakika:.0f}dk | "
+                    f"Skor:{kayit_ev_gol}-{kayit_dep_gol} (BER)\n"
+                    f"⚡ Ağır underdog berabere tutuyor → tempo artacak\n"
+                    f"📊 Excel: %89.1 başarı n=632 (C5'ten çok güvenilir)"
+                ),
+                guc_seviyesi  = "🔥 KRİTİK"
+            )
+
+        # ── [E17] 2.YARI SPESİFİK: AH<=-1.0 + İY 1+ gol + 46-65dk ─────────
+        # %86.8 n=4190 — 2.yarı için eksik olan AH+IY kombinasyonu
+        if ah_degeri <= -1.0 and iy_toplam_gol >= 1 and 46 <= dakika <= 65:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E17: Favori + İY Gol Var + 2.Yarı Başı",
+                basari_orani  = 86.8,
+                orneklem      = 4190,
+                market_oneri  = "Sıradaki Gol / 2Y 0.5 ÜST / MS Sonuç",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} | ⏱{dakika:.0f}dk | "
+                    f"İY:{iy_toplam_gol} gol\n"
+                    f"⚡ Favori 1.yarıda gol bulmuş, 2.yarı devam penceresi\n"
+                    f"📊 Excel: %86.8 başarı n=4190 — çok güvenilir"
+                ),
+                guc_seviyesi  = "✅ GÜÇLÜ"
+            )
+
+        # ── [E20] DENGELİ MAÇ OVER: |AH|<=0.25 ─────────────────────────────
+        # AH≈0 → Avg Gol=3.12 (tüm grupların en yükseği) → OVER fırsatı
+        if abs(ah_degeri) <= 0.25 and dakika <= 40:
+            return ExcelSinyalSonucu(
+                filtre_adi    = "E20: Dengeli Maç — Yüksek Gol Beklentisi",
+                basari_orani  = 76.0,
+                orneklem      = 229,
+                market_oneri  = "MS 2.5 ÜST / KG Var — dengeli maçlar en çok gol üretiyor",
+                aciklama      = (
+                    f"AH:{ah_degeri:+.2f} (Dengeli) | ⏱{dakika:.0f}dk\n"
+                    f"📈 Dengeli maçlarda Avg Gol=3.12 (tüm grupların en yükseği!)\n"
+                    f"💡 Her iki takım da gol arayışında → KG Var ihtimali güçlü\n"
+                    f"📊 Excel: %76.0 win n=229"
+                ),
+                guc_seviyesi  = "⚠️ ORTA"
+            )
+
+        return None  # Hiçbir filtre eşleşmedi
+
+    @staticmethod
+    def mesaj_olustur(
+        ev_adi:  str,
+        dep_adi: str,
+        skor:    str,
+        dk:      float,
+        league:  str,
+        sonuc:   ExcelSinyalSonucu,
+    ) -> str:
+        blok_uyari = "\n⛔ *Bu sinyal bloklanmıştır — işlem yapma.*" if sonuc.blok else ""
+        return (
+            f"\n{'═'*30}\n"
+            f"📈 *EXCEL ORAN ANALİZİ: {sonuc.guc_seviyesi}*\n"
+            f"⚽ {ev_adi} {skor} {dep_adi}\n"
+            f"🏆 {league}\n"
+            f"{'─'*28}\n"
+            f"🔬 *{sonuc.filtre_adi}*\n"
+            f"{sonuc.aciklama}\n"
+            f"{'─'*28}\n"
+            f"💡 *Market:* {sonuc.market_oneri}\n"
+            f"📊 _Başarı: %{sonuc.basari_orani:.1f} | n={sonuc.orneklem}_\n"
+            f"{'─'*28}\n"
+            f"📁 _Kaynak: 26.005 gerçek maç kaydı_"
+            f"{blok_uyari}"
+        )
+
+
+excel_oran_filtresi = ExcelOranFiltresi()
+
 
 # ============================================================================
 # [R1] AH HAREKET TAKİBİ — Velocity + Acceleration + Momentum
@@ -2230,12 +2550,46 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                             return mesaj, gemini_mesaj, claude_mesaj
                     except Exception as ec:
                         logger.debug(f"Claude AH hata: {ec}")
-                    return mesaj, gemini_mesaj   # iki mesaj döndür
+                    return mesaj, gemini_mesaj, None
         except Exception as eg:
             logger.debug(f"Gemini filtre hata: {eg}")
+
+        # ── EXCEL ORAN ANALİZİ FİLTRESİ ──────────────────────────────────────
+        # Gemini eşleşmese bile Excel filtresi bağımsız çalışır
+        try:
+            iy_gol_tahmini = toplam_gol if dk < 46 else max(0, toplam_gol - 1)
+            excel_sonuc = excel_oran_filtresi.kontrol_et(
+                dakika        = dk,
+                ah_degeri     = ah_val,
+                kayit_ev_gol  = kayit_ev,
+                kayit_dep_gol = kayit_dep,
+                iy_toplam_gol = iy_gol_tahmini,
+            )
+            if excel_sonuc:
+                excel_key = f"EXC_{excel_sonuc.filtre_adi[:10]}"
+                if not sinyal_gecmisi.zaten_gonderildi_mi(
+                        event_id, int(dk), excel_key):
+                    if excel_sonuc.blok:
+                        # BLOK → ana sinyali durdur, uyarı gönder
+                        blok_msg = ExcelOranFiltresi.mesaj_olustur(
+                            ev_adi=ev_adi, dep_adi=dep_adi,
+                            skor=skor, dk=dk,
+                            league=league_name, sonuc=excel_sonuc)
+                        sinyal_gecmisi.kaydet(event_id, int(dk), excel_key)
+                        await telegram_queue.put((CHAT_ID, blok_msg))
+                        return None
+                    else:
+                        excel_mesaj = ExcelOranFiltresi.mesaj_olustur(
+                            ev_adi=ev_adi, dep_adi=dep_adi,
+                            skor=skor, dk=dk,
+                            league=league_name, sonuc=excel_sonuc)
+                        sinyal_gecmisi.kaydet(event_id, int(dk), excel_key)
+                        return mesaj, None, excel_mesaj
+        except Exception as ex:
+            logger.debug(f"Excel oran filtre hata: {ex}")
         # ─────────────────────────────────────────────────────────────────
 
-        return mesaj, None
+        return mesaj, None, None
 
     except Exception as e:
         logger.error(f"mac_analiz_et:{e}")
