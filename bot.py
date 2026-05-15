@@ -6,39 +6,7 @@ from typing import Optional, Dict, List, Tuple
 from collections import deque
 
 # ============================================================================
-# BOT V54 — TAM ENTEGRASYON (V53 + Claude/Top10 Tam Entegrasyon + AH Momentum)
-# ============================================================================
-#
-# V54 DEĞİŞİKLİKLERİ:
-#
-# [V54-1] ClaudeAHFiltresi sınıf çakışması giderildi.
-#         Orijinal ClaudeAHFiltresi (ClaudeSinyalSonucu) → ClaudeOrijinalFiltresi
-#         Yeni ClaudeAHFiltresi (ClaudeAHSinyalSonucu) korundu, tek isim.
-#
-# [V54-2] mac_analiz_et filtre sırası düzeltildi:
-#         1. Blok/Tuzak filtreleri (BlokFiltresi)
-#         2. Excel Top 10 filtreleri (ExcelTop10Filtresi) — BAĞIMSIZ
-#         3. Claude AH filtreleri (ClaudeAHFiltresi) — BAĞIMSIZ
-#         4. Gemini filtreleri (GeminiFiltresi) — BAĞIMSIZ
-#         5. Excel Oran filtreleri (ExcelOranFiltresi) — BAĞIMSIZ
-#
-# [V54-3] AH Momentum Proxy → tüm mesajlara ek onay olarak eklendi.
-#         kinetik.momentum_score > 0.5 → "🔑 AH Momentum: +X.XXX" satırı
-#
-# [V54-4] Tüm mesaj_olustur fonksiyonları standart formata getirildi:
-#         📊 [Kategori] STRATEJİ SİNYALİ
-#         ⚽ EvTakım X-Y DepTakım
-#         🏆 Lig | ⏱ Dakika
-#         📌 Filtre | 🎯 Market
-#         📊 Başarı | 📦 Örneklem | 🧪 Wilson CI Alt | ⚠️ Risk
-#         ✅ Ek Onaylar (varsa)
-#
-# [V54-5] ExcelTop10/ClaudeAH mesaj_olustur'daki \\n escape hatası düzeltildi.
-#
-# [V54-6] Duplicate engelleme: 5dk pencere tüm filtreler için aktif.
-#         Öncelik override: Top10 > Claude > Gemini > Excel
-#
-# [V54-7] BlokFiltresi artık mac_analiz_et'te ilk sırada çağrılıyor.
+# BOT V52 — TAM ENTEGRASYONu (V51 + Kantitatif Algoritmik Ticaret Raporu)
 # ============================================================================
 # V51 korunanlar (23 düzeltme/özellik): Tümü korundu.
 #
@@ -474,43 +442,21 @@ class GeminiFiltresi:
         dk:       float,
         league:   str,
         sonuc:    GeminiSinyalSonucu,
-        ek_onaylar: list = None,
     ) -> str:
-        # Wilson CI: Gemini filtreleri için approximation (n büyük olduğu varsayımı)
-        import math as _math
-        try:
-            p = sonuc.basari_orani / 100
-            n = sonuc.orneklem
-            z = 1.96
-            wilson_low = round(((p + z*z/(2*n) - z*_math.sqrt((p*(1-p)/n) + z*z/(4*n*n))) /
-                                (1 + z*z/n)) * 100, 1)
-        except Exception:
-            wilson_low = round(sonuc.basari_orani - 3.0, 1)
-        try:
-            be_oran = round(100 / sonuc.basari_orani, 2)
-        except Exception:
-            be_oran = 1.10
-        onay_str = ""
-        if ek_onaylar:
-            onay_str = "\n✅ *Ek Onaylar:*\n" + "\n".join(f"  - {o}" for o in ek_onaylar)
+        """Ayrı Telegram bildirimi için mesaj formatı"""
         return (
-            f"\n{'═'*32}\n"
-            f"📊 *[GEMİNİ] STRATEJİ SİNYALİ — {sonuc.guc_seviyesi}*\n"
+            f"\n{'═'*30}\n"
+            f"📡 *GEMİNİ FİLTRE: {sonuc.guc_seviyesi}*\n"
             f"⚽ {ev_adi} {skor} {dep_adi}\n"
             f"🏆 {league}\n"
-            f"⏱ Dakika: {dk:.0f}\n"
-            f"{'─'*30}\n"
-            f"📌 Filtre: {sonuc.filtre_adi}\n"
-            f"🎯 Market: {sonuc.market_oneri}\n"
-            f"{'─'*30}\n"
-            f"📊 Başarı: %{sonuc.basari_orani:.1f}\n"
-            f"📦 Örneklem: n={sonuc.orneklem}\n"
-            f"🧪 Wilson CI Alt: %{wilson_low:.1f}\n"
-            f"💱 Break-Even Min Oran: {be_oran:.2f}\n"
-            f"⚠️ Risk: {sonuc.guc_seviyesi}\n"
-            f"{'─'*30}\n"
-            f"📝 {sonuc.aciklama}"
-            f"{onay_str}"
+            f"{'─'*28}\n"
+            f"🔍 *{sonuc.filtre_adi}*\n"
+            f"{sonuc.aciklama}\n"
+            f"{'─'*28}\n"
+            f"💡 *Market Önerisi:*\n"
+            f"   {sonuc.market_oneri}\n"
+            f"{'─'*28}\n"
+            f"⚠️ _Bu ek analizdir. Kendi değerlendirmeni yap._"
         )
 
 
@@ -543,7 +489,7 @@ gemini_filtresi = GeminiFiltresi()
 
 @_dc
 class ClaudeSinyalSonucu:
-    """Claude orijinal AH+oran filtresi sonucu (V51 uyumlu)"""
+    """Claude orijinal AH+oran filtresi sonucu"""
     filtre_adi:    str
     basari_orani:  float
     orneklem:      int
@@ -554,14 +500,11 @@ class ClaudeSinyalSonucu:
     overfitting_notu: str    # Eğer train/test dikkat gerektiriyorsa
 
 
-# [V54-1] ClaudeOrijinalFiltresi: orijinal V51 filtresi, isim çakışması giderildi.
-# ClaudeAHFiltresi adı artık sadece V53+ yeni sınıfa (satır 1111+) ait.
-class ClaudeOrijinalFiltresi:
+class ClaudeAHFiltresi:
     """
-    [V54-1] Eski adı ClaudeAHFiltresi idi — V53'teki yeni sınıfla çakışıyordu.
-    Şimdi ClaudeOrijinalFiltresi olarak yeniden adlandırıldı.
-    Claude bağımsız AH+oran analizi filtreleri (doğrulanmış, 3.560 sinyal).
-    Ana sinyale DOKUNMAZ — ayrı Telegram bildirimi üretir.
+    Claude bağımsız AH+oran analizi filtreleri.
+    Gemini'den farklı boyutlar: AH tam değer, Corner/Dakika, Gol×AH.
+    Ana sinyale DOKUNMAZ — ayrı Telegram bildirimi.
     """
 
     @staticmethod
@@ -759,38 +702,24 @@ class ClaudeOrijinalFiltresi:
         dk:       float,
         league:   str,
         sonuc:    ClaudeSinyalSonucu,
-        ek_onaylar: list = None,
     ) -> str:
-        # Break-even minimum oran (gerçek odds yoksa)
-        try:
-            be_oran = round(100 / sonuc.basari_orani, 2)
-        except Exception:
-            be_oran = 1.10
-        onay_str = ""
-        if ek_onaylar:
-            onay_str = "\n✅ *Ek Onaylar:*\n" + "\n".join(f"  - {o}" for o in ek_onaylar)
         return (
-            f"\n{'═'*32}\n"
-            f"📊 *[CLAUDE] STRATEJİ SİNYALİ*\n"
+            f"\n{'═'*30}\n"
+            f"📊 *CLAUDE AH ANALİZİ: {sonuc.guc_seviyesi}*\n"
             f"⚽ {ev_adi} {skor} {dep_adi}\n"
             f"🏆 {league}\n"
-            f"⏱ Dakika: {dk:.0f}\n"
-            f"{'─'*30}\n"
-            f"📌 Filtre: {sonuc.filtre_adi}\n"
-            f"🎯 Market: {sonuc.market_oneri}\n"
-            f"{'─'*30}\n"
-            f"📊 Başarı: %{sonuc.basari_orani:.1f}\n"
-            f"📦 Örneklem: n={sonuc.orneklem}\n"
-            f"🧪 Wilson CI Alt: %{sonuc.ci_low:.1f}\n"
-            f"💱 Break-Even Min Oran: {be_oran:.2f}\n"
-            f"⚠️ Risk: {sonuc.guc_seviyesi}\n"
-            f"{'─'*30}\n"
-            f"🔬 _{sonuc.overfitting_notu}_"
-            f"{onay_str}"
+            f"{'─'*28}\n"
+            f"🔬 *{sonuc.filtre_adi}*\n"
+            f"{sonuc.aciklama}\n"
+            f"{'─'*28}\n"
+            f"💡 *Market:* {sonuc.market_oneri}\n"
+            f"⚙️ _CI≥%{sonuc.ci_low:.0f} | n={sonuc.orneklem}_\n"
+            f"{'─'*28}\n"
+            f"⚠️ _{sonuc.overfitting_notu}_"
         )
 
 
-claude_orijinal_filtresi = ClaudeOrijinalFiltresi()
+claude_ah_filtresi = ClaudeAHFiltresi()
 
 
 # ============================================================================
@@ -1157,35 +1086,8 @@ class ExcelTop10Filtresi:
         return None
 
     @staticmethod
-    def mesaj_olustur(ev_adi: str, dep_adi: str, skor: str, dk: float,
-                      league: str, sonuc: 'ExcelTop10SinyalSonucu',
-                      ek_onaylar: list = None) -> str:
-        try:
-            be_oran = round(100 / sonuc.basari_orani, 2)
-        except Exception:
-            be_oran = 1.10
-        onay_str = ""
-        if ek_onaylar:
-            onay_str = "\n✅ *Ek Onaylar:*\n" + "\n".join(f"  - {o}" for o in ek_onaylar)
-        return (
-            f"\n{'═'*32}\n"
-            f"📊 *[EXCEL TOP 10] STRATEJİ SİNYALİ — {sonuc.guc_seviyesi}*\n"
-            f"⚽ {ev_adi} {skor} {dep_adi}\n"
-            f"🏆 {league}\n"
-            f"⏱ Dakika: {dk:.0f}\n"
-            f"{'─'*30}\n"
-            f"📌 Filtre: {sonuc.filtre_adi}\n"
-            f"🎯 Market: {sonuc.market_oneri}\n"
-            f"{'─'*30}\n"
-            f"📊 Başarı: %{sonuc.basari_orani:.1f}\n"
-            f"📦 Örneklem: n={sonuc.orneklem}\n"
-            f"🧪 Wilson CI Alt: %{sonuc.wilson_ci_alt:.1f}\n"
-            f"💱 Break-Even Min Oran: {be_oran:.2f}\n"
-            f"⚠️ Risk: {sonuc.risk_seviyesi}\n"
-            f"{'─'*30}\n"
-            f"📁 _Kaynak: 26.005 gerçek maç kaydı_"
-            f"{onay_str}"
-        )
+    def mesaj_olustur(ev_adi: str, dep_adi: str, skor: str, dk: float, league: str, sonuc: ExcelTop10SinyalSonucu) -> str:
+        return f"\\n{'═'*40}\\n🏆 *EXCEL TOP 10: {sonuc.guc_seviyesi}*\\n⚽ {ev_adi} {skor} {dep_adi}\\n🏅 {league}\\n{'─'*40}\\n✨ *{sonuc.filtre_adi}*\\n{sonuc.aciklama}\\n{'─'*40}\\n💡 Market: {sonuc.market_oneri}\\n📊 %{sonuc.basari_orani:.1f} | n={sonuc.orneklem} | {sonuc.risk_seviyesi} Risk"
 
 excel_top10_filtresi = ExcelTop10Filtresi()
 
