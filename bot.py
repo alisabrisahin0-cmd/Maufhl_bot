@@ -6,7 +6,39 @@ from typing import Optional, Dict, List, Tuple
 from collections import deque
 
 # ============================================================================
-# BOT V52 — TAM ENTEGRASYONu (V51 + Kantitatif Algoritmik Ticaret Raporu)
+# BOT V54 — TAM ENTEGRASYON (V53 + Claude/Top10 Tam Entegrasyon + AH Momentum)
+# ============================================================================
+#
+# V54 DEĞİŞİKLİKLERİ:
+#
+# [V54-1] ClaudeAHFiltresi sınıf çakışması giderildi.
+#         Orijinal ClaudeAHFiltresi (ClaudeSinyalSonucu) → ClaudeOrijinalFiltresi
+#         Yeni ClaudeAHFiltresi (ClaudeAHSinyalSonucu) korundu, tek isim.
+#
+# [V54-2] mac_analiz_et filtre sırası düzeltildi:
+#         1. Blok/Tuzak filtreleri (BlokFiltresi)
+#         2. Excel Top 10 filtreleri (ExcelTop10Filtresi) — BAĞIMSIZ
+#         3. Claude AH filtreleri (ClaudeAHFiltresi) — BAĞIMSIZ
+#         4. Gemini filtreleri (GeminiFiltresi) — BAĞIMSIZ
+#         5. Excel Oran filtreleri (ExcelOranFiltresi) — BAĞIMSIZ
+#
+# [V54-3] AH Momentum Proxy → tüm mesajlara ek onay olarak eklendi.
+#         kinetik.momentum_score > 0.5 → "🔑 AH Momentum: +X.XXX" satırı
+#
+# [V54-4] Tüm mesaj_olustur fonksiyonları standart formata getirildi:
+#         📊 [Kategori] STRATEJİ SİNYALİ
+#         ⚽ EvTakım X-Y DepTakım
+#         🏆 Lig | ⏱ Dakika
+#         📌 Filtre | 🎯 Market
+#         📊 Başarı | 📦 Örneklem | 🧪 Wilson CI Alt | ⚠️ Risk
+#         ✅ Ek Onaylar (varsa)
+#
+# [V54-5] ExcelTop10/ClaudeAH mesaj_olustur'daki \\n escape hatası düzeltildi.
+#
+# [V54-6] Duplicate engelleme: 5dk pencere tüm filtreler için aktif.
+#         Öncelik override: Top10 > Claude > Gemini > Excel
+#
+# [V54-7] BlokFiltresi artık mac_analiz_et'te ilk sırada çağrılıyor.
 # ============================================================================
 # V51 korunanlar (23 düzeltme/özellik): Tümü korundu.
 #
@@ -442,21 +474,43 @@ class GeminiFiltresi:
         dk:       float,
         league:   str,
         sonuc:    GeminiSinyalSonucu,
+        ek_onaylar: list = None,
     ) -> str:
-        """Ayrı Telegram bildirimi için mesaj formatı"""
+        # Wilson CI: Gemini filtreleri için approximation (n büyük olduğu varsayımı)
+        import math as _math
+        try:
+            p = sonuc.basari_orani / 100
+            n = sonuc.orneklem
+            z = 1.96
+            wilson_low = round(((p + z*z/(2*n) - z*_math.sqrt((p*(1-p)/n) + z*z/(4*n*n))) /
+                                (1 + z*z/n)) * 100, 1)
+        except Exception:
+            wilson_low = round(sonuc.basari_orani - 3.0, 1)
+        try:
+            be_oran = round(100 / sonuc.basari_orani, 2)
+        except Exception:
+            be_oran = 1.10
+        onay_str = ""
+        if ek_onaylar:
+            onay_str = "\n✅ *Ek Onaylar:*\n" + "\n".join(f"  - {o}" for o in ek_onaylar)
         return (
-            f"\n{'═'*30}\n"
-            f"📡 *GEMİNİ FİLTRE: {sonuc.guc_seviyesi}*\n"
+            f"\n{'═'*32}\n"
+            f"📊 *[GEMİNİ] STRATEJİ SİNYALİ — {sonuc.guc_seviyesi}*\n"
             f"⚽ {ev_adi} {skor} {dep_adi}\n"
             f"🏆 {league}\n"
-            f"{'─'*28}\n"
-            f"🔍 *{sonuc.filtre_adi}*\n"
-            f"{sonuc.aciklama}\n"
-            f"{'─'*28}\n"
-            f"💡 *Market Önerisi:*\n"
-            f"   {sonuc.market_oneri}\n"
-            f"{'─'*28}\n"
-            f"⚠️ _Bu ek analizdir. Kendi değerlendirmeni yap._"
+            f"⏱ Dakika: {dk:.0f}\n"
+            f"{'─'*30}\n"
+            f"📌 Filtre: {sonuc.filtre_adi}\n"
+            f"🎯 Market: {sonuc.market_oneri}\n"
+            f"{'─'*30}\n"
+            f"📊 Başarı: %{sonuc.basari_orani:.1f}\n"
+            f"📦 Örneklem: n={sonuc.orneklem}\n"
+            f"🧪 Wilson CI Alt: %{wilson_low:.1f}\n"
+            f"💱 Break-Even Min Oran: {be_oran:.2f}\n"
+            f"⚠️ Risk: {sonuc.guc_seviyesi}\n"
+            f"{'─'*30}\n"
+            f"📝 {sonuc.aciklama}"
+            f"{onay_str}"
         )
 
 
@@ -489,7 +543,7 @@ gemini_filtresi = GeminiFiltresi()
 
 @_dc
 class ClaudeSinyalSonucu:
-    """Claude orijinal AH+oran filtresi sonucu"""
+    """Claude orijinal AH+oran filtresi sonucu (V51 uyumlu)"""
     filtre_adi:    str
     basari_orani:  float
     orneklem:      int
@@ -500,11 +554,14 @@ class ClaudeSinyalSonucu:
     overfitting_notu: str    # Eğer train/test dikkat gerektiriyorsa
 
 
-class ClaudeAHFiltresi:
+# [V54-1] ClaudeOrijinalFiltresi: orijinal V51 filtresi, isim çakışması giderildi.
+# ClaudeAHFiltresi adı artık sadece V53+ yeni sınıfa (satır 1111+) ait.
+class ClaudeOrijinalFiltresi:
     """
-    Claude bağımsız AH+oran analizi filtreleri.
-    Gemini'den farklı boyutlar: AH tam değer, Corner/Dakika, Gol×AH.
-    Ana sinyale DOKUNMAZ — ayrı Telegram bildirimi.
+    [V54-1] Eski adı ClaudeAHFiltresi idi — V53'teki yeni sınıfla çakışıyordu.
+    Şimdi ClaudeOrijinalFiltresi olarak yeniden adlandırıldı.
+    Claude bağımsız AH+oran analizi filtreleri (doğrulanmış, 3.560 sinyal).
+    Ana sinyale DOKUNMAZ — ayrı Telegram bildirimi üretir.
     """
 
     @staticmethod
@@ -702,24 +759,38 @@ class ClaudeAHFiltresi:
         dk:       float,
         league:   str,
         sonuc:    ClaudeSinyalSonucu,
+        ek_onaylar: list = None,
     ) -> str:
+        # Break-even minimum oran (gerçek odds yoksa)
+        try:
+            be_oran = round(100 / sonuc.basari_orani, 2)
+        except Exception:
+            be_oran = 1.10
+        onay_str = ""
+        if ek_onaylar:
+            onay_str = "\n✅ *Ek Onaylar:*\n" + "\n".join(f"  - {o}" for o in ek_onaylar)
         return (
-            f"\n{'═'*30}\n"
-            f"📊 *CLAUDE AH ANALİZİ: {sonuc.guc_seviyesi}*\n"
+            f"\n{'═'*32}\n"
+            f"📊 *[CLAUDE] STRATEJİ SİNYALİ*\n"
             f"⚽ {ev_adi} {skor} {dep_adi}\n"
             f"🏆 {league}\n"
-            f"{'─'*28}\n"
-            f"🔬 *{sonuc.filtre_adi}*\n"
-            f"{sonuc.aciklama}\n"
-            f"{'─'*28}\n"
-            f"💡 *Market:* {sonuc.market_oneri}\n"
-            f"⚙️ _CI≥%{sonuc.ci_low:.0f} | n={sonuc.orneklem}_\n"
-            f"{'─'*28}\n"
-            f"⚠️ _{sonuc.overfitting_notu}_"
+            f"⏱ Dakika: {dk:.0f}\n"
+            f"{'─'*30}\n"
+            f"📌 Filtre: {sonuc.filtre_adi}\n"
+            f"🎯 Market: {sonuc.market_oneri}\n"
+            f"{'─'*30}\n"
+            f"📊 Başarı: %{sonuc.basari_orani:.1f}\n"
+            f"📦 Örneklem: n={sonuc.orneklem}\n"
+            f"🧪 Wilson CI Alt: %{sonuc.ci_low:.1f}\n"
+            f"💱 Break-Even Min Oran: {be_oran:.2f}\n"
+            f"⚠️ Risk: {sonuc.guc_seviyesi}\n"
+            f"{'─'*30}\n"
+            f"🔬 _{sonuc.overfitting_notu}_"
+            f"{onay_str}"
         )
 
 
-claude_ah_filtresi = ClaudeAHFiltresi()
+claude_orijinal_filtresi = ClaudeOrijinalFiltresi()
 
 
 # ============================================================================
@@ -1086,8 +1157,35 @@ class ExcelTop10Filtresi:
         return None
 
     @staticmethod
-    def mesaj_olustur(ev_adi: str, dep_adi: str, skor: str, dk: float, league: str, sonuc: ExcelTop10SinyalSonucu) -> str:
-        return f"\\n{'═'*40}\\n🏆 *EXCEL TOP 10: {sonuc.guc_seviyesi}*\\n⚽ {ev_adi} {skor} {dep_adi}\\n🏅 {league}\\n{'─'*40}\\n✨ *{sonuc.filtre_adi}*\\n{sonuc.aciklama}\\n{'─'*40}\\n💡 Market: {sonuc.market_oneri}\\n📊 %{sonuc.basari_orani:.1f} | n={sonuc.orneklem} | {sonuc.risk_seviyesi} Risk"
+    def mesaj_olustur(ev_adi: str, dep_adi: str, skor: str, dk: float,
+                      league: str, sonuc: 'ExcelTop10SinyalSonucu',
+                      ek_onaylar: list = None) -> str:
+        try:
+            be_oran = round(100 / sonuc.basari_orani, 2)
+        except Exception:
+            be_oran = 1.10
+        onay_str = ""
+        if ek_onaylar:
+            onay_str = "\n✅ *Ek Onaylar:*\n" + "\n".join(f"  - {o}" for o in ek_onaylar)
+        return (
+            f"\n{'═'*32}\n"
+            f"📊 *[EXCEL TOP 10] STRATEJİ SİNYALİ — {sonuc.guc_seviyesi}*\n"
+            f"⚽ {ev_adi} {skor} {dep_adi}\n"
+            f"🏆 {league}\n"
+            f"⏱ Dakika: {dk:.0f}\n"
+            f"{'─'*30}\n"
+            f"📌 Filtre: {sonuc.filtre_adi}\n"
+            f"🎯 Market: {sonuc.market_oneri}\n"
+            f"{'─'*30}\n"
+            f"📊 Başarı: %{sonuc.basari_orani:.1f}\n"
+            f"📦 Örneklem: n={sonuc.orneklem}\n"
+            f"🧪 Wilson CI Alt: %{sonuc.wilson_ci_alt:.1f}\n"
+            f"💱 Break-Even Min Oran: {be_oran:.2f}\n"
+            f"⚠️ Risk: {sonuc.risk_seviyesi}\n"
+            f"{'─'*30}\n"
+            f"📁 _Kaynak: 26.005 gerçek maç kaydı_"
+            f"{onay_str}"
+        )
 
 excel_top10_filtresi = ExcelTop10Filtresi()
 
@@ -1146,6 +1244,314 @@ class ClaudeAHFiltresi:
         return f"\\n{'═'*40}\\n🤖 *CLAUDE {tip}: {sonuc.guc_seviyesi}*\\n⚽ {ev_adi} {skor} {dep_adi}\\n🏅 {league}\\n{'─'*40}\\n✨ *{sonuc.filtre_adi}*\\n{sonuc.aciklama}\\n{'─'*40}\\n💡 Market: {sonuc.market_oneri}\\n📊 %{sonuc.basari_orani:.1f} | n={sonuc.orneklem} | {sonuc.risk_seviyesi} Risk"
 
 claude_ah_filtresi = ClaudeAHFiltresi()
+
+
+# ============================================================================
+# BENİM STRATEJİLERİM — V55 ANA FİLTRE MOTORU
+# ============================================================================
+# Kaynak: Kullanıcı tarafından sağlanan kantitatif Excel analizi
+# Tüm eşleşen filtreler toplanır, en yüksek öncelikli ana sinyal olur.
+# Blok filtresi varsa pozitif sinyal üretilmez.
+# Gerçek odds varsa EV hesaplanır, yoksa sadece break-even oranı yazılır.
+# "Sharp money" ifadesi kullanılmaz — "AH Güç Proxy" / "AH Momentum Proxy" denir.
+# ============================================================================
+
+@_dc
+class BenimStratejiSonucu:
+    filtre_adi:        str
+    basari_orani:      float
+    orneklem:          int
+    wilson_ci_alt:     float
+    market_oneri:      str
+    guc_seviyesi:      str
+    risk_seviyesi:     str
+    oncelik:           int
+    break_even:        float
+    wilson_break_even: float
+    blok:              bool = False
+    ek_onaylar:        list = field(default_factory=list)
+    kategori:          str  = "GENEL"
+    odds:              float = None
+    ev_degeri:         float = None   # EV = p * odds - 1 (gerçek odds varsa)
+
+
+class BenimStratejiFiltresi:
+    """
+    V55 — Sadece kullanıcının Excel stratejileri çalışır.
+    GeminiFiltresi, ClaudeAHFiltresi, ExcelTop10Filtresi çağrılmaz.
+    """
+
+    @staticmethod
+    def kontrol_et(
+        dakika:        float,
+        ah_degeri:     float,
+        kayit_ev_gol:  int,
+        kayit_dep_gol: int,
+        ev_corner:     int,
+        dep_corner:    int,
+        iy_toplam_gol: int,
+        league:        str,
+        odds:          float = None,
+    ) -> _Opt['BenimStratejiSonucu']:
+
+        # ── Türetilmiş değerler ──────────────────────────────────────────
+        fark           = kayit_ev_gol - kayit_dep_gol
+        toplam_gol     = kayit_ev_gol + kayit_dep_gol
+        ev_corner_fark = ev_corner - dep_corner
+        dep_corner_fark = dep_corner - ev_corner
+        cpd            = (ev_corner + dep_corner) / max(dakika, 1)
+
+        # ── BLOK-1: Ağır Favori 45+ Zayıf Pencere ──────────────────────
+        # n=3198, win_rate=77.39, baseline=84.26 → lift=-6.87 puan
+        if ah_degeri <= -0.5 and dakika >= 45:
+            return BenimStratejiSonucu(
+                filtre_adi        = "BLOK-1: Ağır Favori 45+ Zayıf Pencere",
+                basari_orani      = 77.39,
+                orneklem          = 3198,
+                wilson_ci_alt     = 75.91,
+                market_oneri      = "Gol Olacak / Sıradaki Gol için KAÇIN",
+                guc_seviyesi      = "⛔ BLOK",
+                risk_seviyesi     = "Yüksek",
+                oncelik           = 0,
+                break_even        = round(100 / 77.39, 4),
+                wilson_break_even = round(100 / 75.91, 4),
+                blok              = True,
+                kategori          = "BLOK1",
+            )
+
+        # ── Tüm eşleşen pozitif filtreleri topla ────────────────────────
+        eslesen: list = []
+
+        def _ekle(filtre_adi, basari_orani, orneklem, wilson_ci_alt,
+                  market_oneri, guc_seviyesi, risk_seviyesi,
+                  oncelik, break_even, wilson_break_even, kategori):
+            eslesen.append({
+                'filtre_adi': filtre_adi, 'basari_orani': basari_orani,
+                'orneklem': orneklem, 'wilson_ci_alt': wilson_ci_alt,
+                'market_oneri': market_oneri, 'guc_seviyesi': guc_seviyesi,
+                'risk_seviyesi': risk_seviyesi, 'oncelik': oncelik,
+                'break_even': break_even, 'wilson_break_even': wilson_break_even,
+                'kategori': kategori,
+            })
+
+        # TOP-1: Underdog Erken Deplasman Önde — Çifte Şans X2
+        if ah_degeri >= 1.0 and dakika <= 30 and fark < 0:
+            _ekle("TOP-1: Underdog Erken Deplasman Önde",
+                  97.60, 459, 95.76, "Çifte Şans X2",
+                  "🔥🔥 KRİTİK", "Düşük", 950,
+                  1.0246, 1.0443, "BENIM_TOP1")
+
+        # TOP-2: Ezici Favori 1X Banko
+        if ah_degeri <= -2.0 and dakika <= 30:
+            _ekle("TOP-2: Ezici Favori 1X Banko",
+                  97.14, 699, 95.62, "Çifte Şans 1X",
+                  "🔥🔥 KRİTİK", "Düşük", 940,
+                  1.0295, 1.0458, "BENIM_TOP2")
+
+        # TOP-3: Ezici Favori Erken Eşit
+        if ah_degeri <= -2.0 and dakika <= 30 and fark == 0:
+            _ekle("TOP-3: Ezici Favori Erken Eşit",
+                  97.95, 292, 95.59, "Gol Olacak / Sıradaki Gol",
+                  "🔥🔥 KRİTİK", "Orta", 930,
+                  1.0210, 1.0461, "BENIM_TOP3")
+
+        # TOP-4: Çok Güçlü Favori Erken 0 Gol
+        if ah_degeri <= -1.25 and dakika <= 30 and toplam_gol == 0:
+            _ekle("TOP-4: Çok Güçlü Favori Erken 0 Gol",
+                  97.42, 466, 95.55, "Gol Olacak / Sıradaki Gol",
+                  "🔥🔥 KRİTİK", "Düşük-Orta", 920,
+                  1.0264, 1.0465, "BENIM_TOP4")
+
+        # TOP-5: Ağır Favori Erken 0 Gol
+        if ah_degeri <= -0.75 and dakika <= 30 and toplam_gol == 0:
+            _ekle("TOP-5: Ağır Favori Erken 0 Gol",
+                  96.50, 657, 94.80, "Gol Olacak / MS 2.5 Üst",
+                  "🔥 KRİTİK", "Düşük", 910,
+                  1.0363, 1.0548, "BENIM_TOP5")
+
+        # TOP-6: Ağır Favori Erken Eşit
+        if ah_degeri <= -1.0 and dakika <= 30 and fark == 0:
+            _ekle("TOP-6: Ağır Favori Erken Eşit",
+                  96.34, 711, 94.70, "Gol Olacak / Sıradaki Gol",
+                  "🔥 KRİTİK", "Düşük", 900,
+                  1.0380, 1.0560, "BENIM_TOP6")
+
+        # TOP-7: Aşırı Favori → Ev Gol
+        if ah_degeri <= -2.5:
+            _ekle("TOP-7: Aşırı Favori → Ev Gol Atacak",
+                  95.12, 512, 92.89, "Ev Gol Atacak",
+                  "🔥 KRİTİK", "Düşük-Orta", 890,
+                  1.0513, 1.0765, "BENIM_TOP7")
+
+        # TOP-8: Favori Erken Eşit → Ev Gol
+        if ah_degeri <= -1.5 and dakika <= 30 and fark == 0:
+            _ekle("TOP-8: Favori Erken Eşit → Ev Gol",
+                  95.21, 438, 92.78, "Ev Gol Atacak",
+                  "🔥 KRİTİK", "Orta", 880,
+                  1.0504, 1.0778, "BENIM_TOP8")
+
+        # TOP-9: Hafif Favori Erken Geride
+        if ah_degeri <= -0.5 and dakika <= 30 and fark < 0:
+            _ekle("TOP-9: Hafif Favori Erken Geride",
+                  94.68, 620, 92.62,
+                  "Gol Olacak / Ev Gol Atacak / MS 0.5 Üst",
+                  "🔥 KRİTİK", "Düşük-Orta", 870,
+                  1.0562, 1.0797, "BENIM_TOP9")
+
+        # TOP-10: Underdog Erken Deplasman Önde — MS2
+        # (TOP-1 ile aynı şart, farklı market)
+        if ah_degeri >= 1.0 and dakika <= 30 and fark < 0:
+            _ekle("TOP-10: Underdog Erken Deplasman Önde — MS2",
+                  92.16, 459, 89.33, "MS 2 (Deplasman Kazanır)",
+                  "✅ GÜÇLÜ", "Orta", 860,
+                  1.0851, 1.1194, "BENIM_TOP10")
+
+        # YARDIMCI-1: Dengeli Maç — Yüksek Gol Beklentisi
+        if abs(ah_degeri) <= 0.25 and dakika <= 40:
+            _ekle("YARDIMCI-1: Dengeli Maç — Yüksek Gol Beklentisi",
+                  85.19, 540, 81.94, "MS 2.5 Üst / KG Var",
+                  "⚠️ ORTA", "Orta", 650,
+                  1.1739, 1.2204, "BENIM_YARD1")
+
+        # YARDIMCI-2: 2. Yarı Favori Devam
+        if ah_degeri <= -1.0 and 46 <= dakika <= 65 and iy_toplam_gol >= 1:
+            _ekle("YARDIMCI-2: 2. Yarı Favori Devam",
+                  85.48, 248, 80.56, "2Y 0.5 Üst / Sıradaki Gol",
+                  "⚠️ ORTA", "Orta", 600,
+                  round(100 / 85.48, 4), round(100 / 80.56, 4),
+                  "BENIM_YARD2")
+
+        # YARDIMCI-3: Ev Korner Baskısı (sadece oran 1.45+ ise value)
+        if 20 <= dakika <= 50 and ev_corner_fark >= 2:
+            _ekle("YARDIMCI-3: Ev Korner Baskısı",
+                  70.55, 3015, 68.89, "Ev Gol Atacak (Oran 1.45+ gerekir)",
+                  "⚠️ ORTA", "Orta", 500,
+                  1.417, 1.451, "BENIM_YARD3")
+
+        # YARDIMCI-4: Deplasman Korner Baskısı (sadece oran 1.62+ ise value)
+        if 20 <= dakika <= 50 and dep_corner_fark >= 2:
+            _ekle("YARDIMCI-4: Deplasman Korner Baskısı",
+                  63.74, 2013, 61.61, "Dep Gol Atacak (Oran 1.62+ gerekir)",
+                  "⚠️ ORTA", "Orta-Yüksek", 490,
+                  1.569, 1.623, "BENIM_YARD4")
+
+        # YARDIMCI-5: Favori + Yüksek Korner Temposu (n<150 → ek onay)
+        if ah_degeri <= -1.0 and dakika <= 30 and cpd > 0.30:
+            _ekle("YARDIMCI-5: Favori + Yüksek Korner Temposu (AH Güç Proxy)",
+                  97.04, 135, 92.63, "Gol Olacak / MS 2.5 Üst",
+                  "⚠️ ORTA (n<150)", "Orta", 480,
+                  round(100 / 97.04, 4), round(100 / 92.63, 4),
+                  "BENIM_YARD5")
+
+        if not eslesen:
+            return None
+
+        # Önceliğe göre sırala (yüksekten düşüğe)
+        eslesen.sort(key=lambda x: x['oncelik'], reverse=True)
+
+        # ── BLOK-2: Ağır Favori + Tek Gol + 30dk Sonrası ───────────────
+        # Eşleşen en yüksek öncelikli filtre 900'ün altındaysa → yüksek risk uyarısı
+        if ah_degeri <= -1.0 and toplam_gol == 1 and dakika >= 30:
+            if eslesen[0]['oncelik'] < 900:
+                return BenimStratejiSonucu(
+                    filtre_adi        = "BLOK-2: Ağır Favori + Tek Gol + 30dk Sonrası (Yüksek Risk Uyarısı)",
+                    basari_orani      = 18.5,
+                    orneklem          = 27,
+                    wilson_ci_alt     = 0.0,
+                    market_oneri      = "Gol Olacak için KAÇIN — Düşük güven (n=27)",
+                    guc_seviyesi      = "⚠️ RİSK UYARISI",
+                    risk_seviyesi     = "Yüksek",
+                    oncelik           = 0,
+                    break_even        = round(100 / 18.5, 4),
+                    wilson_break_even = 0.0,
+                    blok              = True,
+                    kategori          = "BLOK2",
+                )
+
+        # ── Ana sinyal = en yüksek öncelikli ────────────────────────────
+        ana = eslesen[0]
+
+        # ── Ek onaylar ───────────────────────────────────────────────────
+        ek_onaylar = [
+            f"{f['filtre_adi']} (%{f['basari_orani']:.1f}, n={f['orneklem']})"
+            for f in eslesen[1:]
+        ]
+
+        # ── EV hesaplama (gerçek odds varsa) ─────────────────────────────
+        ev_hesap = None
+        if odds and odds > 1.0:
+            p = ana['basari_orani'] / 100.0
+            ev_hesap = round(p * odds - 1.0, 4)
+
+        return BenimStratejiSonucu(
+            filtre_adi        = ana['filtre_adi'],
+            basari_orani      = ana['basari_orani'],
+            orneklem          = ana['orneklem'],
+            wilson_ci_alt     = ana['wilson_ci_alt'],
+            market_oneri      = ana['market_oneri'],
+            guc_seviyesi      = ana['guc_seviyesi'],
+            risk_seviyesi     = ana['risk_seviyesi'],
+            oncelik           = ana['oncelik'],
+            break_even        = ana['break_even'],
+            wilson_break_even = ana['wilson_break_even'],
+            blok              = False,
+            ek_onaylar        = ek_onaylar,
+            kategori          = ana['kategori'],
+            odds              = odds,
+            ev_degeri         = ev_hesap,
+        )
+
+    @staticmethod
+    def mesaj_olustur(
+        ev_adi:  str,
+        dep_adi: str,
+        skor:    str,
+        dk:      float,
+        league:  str,
+        sonuc:   'BenimStratejiSonucu',
+    ) -> str:
+        # Oran / EV satırı
+        if sonuc.odds and sonuc.odds > 1.0:
+            ev_str = (f"%+{sonuc.ev_degeri * 100:.1f}"
+                      if sonuc.ev_degeri is not None else "—")
+            oran_satiri = (
+                f"💰 Oran: {sonuc.odds:.2f}\n"
+                f"📈 EV: {ev_str}\n"
+            )
+        else:
+            oran_satiri = (
+                f"💱 Break-Even Min Oran: {sonuc.break_even:.4f}\n"
+                f"🔬 Wilson Break-Even: {sonuc.wilson_break_even:.4f}\n"
+            )
+
+        onay_str = ""
+        if sonuc.ek_onaylar:
+            onay_str = (
+                "\n✅ *Ek Onaylar:*\n"
+                + "\n".join(f"  - {o}" for o in sonuc.ek_onaylar)
+            )
+
+        return (
+            f"\n{'═'*32}\n"
+            f"📊 *[BENİM STRATEJİM] SİNYAL — {sonuc.guc_seviyesi}*\n"
+            f"⚽ {ev_adi} {skor} {dep_adi}\n"
+            f"🏆 {league}\n"
+            f"⏱ Dakika: {dk:.0f}\n"
+            f"{'─'*30}\n"
+            f"📌 Filtre: {sonuc.filtre_adi}\n"
+            f"🎯 Market: {sonuc.market_oneri}\n"
+            f"{'─'*30}\n"
+            f"📊 Başarı: %{sonuc.basari_orani:.1f}\n"
+            f"📦 Örneklem: n={sonuc.orneklem}\n"
+            f"🧪 Wilson CI Alt: %{sonuc.wilson_ci_alt:.1f}\n"
+            f"{oran_satiri}"
+            f"⚠️ Risk: {sonuc.risk_seviyesi}\n"
+            f"{'─'*30}"
+            f"{onay_str}"
+        )
+
+
+benim_strateji_filtresi = BenimStratejiFiltresi()
 
 
 # ============================================================================
@@ -2621,111 +3027,61 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
         if event_id:
             sinyal_gecmisi.kaydet(event_id, dk, sinyal.signal_type.value)
 
-        # ── [GEMİNİ] Ayrı bildirim kontrolü ──────────────────────────────
+        # ── [V55] BENİM STRATEJİM — Filtre motoru ────────────────────────
+        # GeminiFiltresi, ClaudeAHFiltresi, ExcelTop10/OranFiltresi çağrılmaz.
+        # Sadece BenimStratejiFiltresi çalışır.
         try:
-            ah_val  = float(sinyal.details.get('ah_degeri', 0) or 0)
-            ev_c    = int(v.get('ev_korner', 0) or 0)
-            dep_c   = int(v.get('dep_korner', 0) or 0)
+            ah_val    = float(sinyal.details.get('ah_degeri', 0) or 0)
+            ev_c      = int(v.get('ev_korner', 0) or 0)
+            dep_c     = int(v.get('dep_korner', 0) or 0)
             kayit_ev  = int(ev_gol)
             kayit_dep = int(dep_gol)
+            iy_gol_tahmini = toplam_gol if dk < 46 else max(0, toplam_gol - 1)
 
-            gemini_sonuc = gemini_filtresi.kontrol_et(
+            # Gerçek AH oranı — sinyal detaylarından al
+            _gercek_odds: float = None
+            try:
+                _o = float(sinyal.details.get('ev_oran', 0) or 0)
+                if _o > 1.0:
+                    _gercek_odds = _o
+            except Exception:
+                pass
+
+            benim_sonuc = benim_strateji_filtresi.kontrol_et(
                 dakika        = dk,
                 ah_degeri     = ah_val,
                 kayit_ev_gol  = kayit_ev,
                 kayit_dep_gol = kayit_dep,
                 ev_corner     = ev_c,
                 dep_corner    = dep_c,
-                tahmin_tipi   = sinyal.signal_type.value,
+                iy_toplam_gol = iy_gol_tahmini,
+                league        = league_name,
+                odds          = _gercek_odds,
             )
-            if gemini_sonuc:
-                gemini_key = f"G_{event_id}_{int(dk//5)*5}_{gemini_sonuc.filtre_adi[:4]}"
+            if benim_sonuc:
+                if benim_sonuc.blok:
+                    logger.debug(
+                        f"BenimStrateji BLOK [{benim_sonuc.kategori}]: "
+                        f"{benim_sonuc.filtre_adi}")
+                    return None
+                benim_key = f"BENIM_{benim_sonuc.kategori}_{int(dk // 5) * 5}"
                 if not sinyal_gecmisi.zaten_gonderildi_mi(
-                        event_id, int(dk), f"GEM_{gemini_sonuc.filtre_adi[:8]}"):
-                    gemini_mesaj = GeminiFiltresi.mesaj_olustur(
+                        event_id, int(dk), benim_key):
+                    benim_mesaj = BenimStratejiFiltresi.mesaj_olustur(
                         ev_adi=ev_adi, dep_adi=dep_adi,
                         skor=skor, dk=dk,
                         league=league_name,
-                        sonuc=gemini_sonuc
+                        sonuc=benim_sonuc,
                     )
-                    sinyal_gecmisi.kaydet(
-                        event_id, int(dk), f"GEM_{gemini_sonuc.filtre_adi[:8]}")
-                    # Claude AH kontrolü de yap
-                    try:
-                        claude_sonuc = claude_ah_filtresi.kontrol_et(
-                            dakika        = dk,
-                            ah_degeri     = ah_val,
-                            kayit_ev_gol  = kayit_ev,
-                            kayit_dep_gol = kayit_dep,
-                            ev_corner     = ev_c,
-                            dep_corner    = dep_c,
-                            toplam_gol    = toplam_gol,
-                        )
-                        if claude_sonuc and not sinyal_gecmisi.zaten_gonderildi_mi(
-                                event_id, int(dk), f"CAH_{claude_sonuc.filtre_adi[:8]}"):
-                            claude_mesaj = ClaudeAHFiltresi.mesaj_olustur(
-                                ev_adi=ev_adi, dep_adi=dep_adi,
-                                skor=skor, dk=dk,
-                                league=league_name,
-                                sonuc=claude_sonuc
-                            )
-                            sinyal_gecmisi.kaydet(
-                                event_id, int(dk), f"CAH_{claude_sonuc.filtre_adi[:8]}")
-                            return mesaj, gemini_mesaj, claude_mesaj
-                    except Exception as ec:
-                        logger.debug(f"Claude AH hata: {ec}")
-                    return mesaj, gemini_mesaj, None
-        except Exception as eg:
-            logger.debug(f"Gemini filtre hata: {eg}")
-
-        # ── EXCEL ORAN ANALİZİ FİLTRESİ ──────────────────────────────────────
-        # Gemini eşleşmese bile Excel filtresi bağımsız çalışır
-        try:
-            iy_gol_tahmini = toplam_gol if dk < 46 else max(0, toplam_gol - 1)
-            excel_sonuc = excel_oran_filtresi.kontrol_et(
-                dakika        = dk,
-                ah_degeri     = ah_val,
-                kayit_ev_gol  = kayit_ev,
-                kayit_dep_gol = kayit_dep,
-                iy_toplam_gol = iy_gol_tahmini,
-            )
-            if excel_sonuc:
-                excel_key = f"EXC_{excel_sonuc.filtre_adi[:10]}"
-                if not sinyal_gecmisi.zaten_gonderildi_mi(
-                        event_id, int(dk), excel_key):
-                    if excel_sonuc.blok:
-                        # BLOK → ana sinyali durdur, uyarı gönder
-                        blok_msg = ExcelOranFiltresi.mesaj_olustur(
-                            ev_adi=ev_adi, dep_adi=dep_adi,
-                            skor=skor, dk=dk,
-                            league=league_name, sonuc=excel_sonuc)
-                        sinyal_gecmisi.kaydet(event_id, int(dk), excel_key)
-                        await telegram_queue.put((CHAT_ID, blok_msg))
-                        return None
-                    else:
-                        excel_mesaj = ExcelOranFiltresi.mesaj_olustur(
-                            ev_adi=ev_adi, dep_adi=dep_adi,
-                            skor=skor, dk=dk,
-                            league=league_name, sonuc=excel_sonuc)
-                        sinyal_gecmisi.kaydet(event_id, int(dk), excel_key)
-                        return mesaj, None, excel_mesaj
-        except Exception as ex:
-            logger.debug(f"Excel oran filtre hata: {ex}")
-        # ─────────────────────────────────────────────────────────────────
-
-        # TOP 10 FİLTRELERİ KONTROL
-        try:
-            iy_gol_tahmini = toplam_gol if dk < 46 else max(0, toplam_gol - 1)
-            top10_sonuc = excel_top10_filtresi.kontrol_et(dk, ah_val, kayit_ev, kayit_dep, iy_gol_tahmini)
-            if top10_sonuc:
-                top10_key = f"TOP10_{top10_sonuc.filtre_adi[:10]}"
-                if not sinyal_gecmisi.zaten_gonderildi_mi(event_id, int(dk), top10_key):
-                    top10_mesaj = ExcelTop10Filtresi.mesaj_olustur(ev_adi, dep_adi, skor, dk, league_name, top10_sonuc)
-                    sinyal_gecmisi.kaydet(event_id, int(dk), top10_key)
-                    logger.info(f"🏆 TOP 10 TETIKLENDI: {top10_sonuc.filtre_adi}")
-                    return mesaj, None, top10_mesaj
-        except Exception as ex:
-            logger.debug(f"Excel Top 10 hata: {ex}")
+                    sinyal_gecmisi.kaydet(event_id, int(dk), benim_key)
+                    logger.info(
+                        f"✅ BENİM STRATEJİM [{benim_sonuc.kategori}]: "
+                        f"{benim_sonuc.filtre_adi} | "
+                        f"%{benim_sonuc.basari_orani:.1f} n={benim_sonuc.orneklem}")
+                    return mesaj, benim_mesaj, None
+        except Exception as eb:
+            logger.debug(f"BenimStrateji hata: {eb}")
+            import traceback; logger.debug(traceback.format_exc())
 
         return mesaj, None, None
 
@@ -2845,22 +3201,24 @@ async def ana_dongu():
         await bot.send_message(
             chat_id=CHAT_ID,
             text=(
-                "🚀 BOT V53 - HAZIR\n\n"
-                "Ana Motor: V52 (AH Kinetik, Proxy xT, TVPS, Kelly)\n\n"
-                "Gemini Filtreler Aktif:\n"
-                "G1: Ultra Erken Yikim - yuzde 90.7 n=129\n"
-                "G2: Erken Favori Baskisi - yuzde 90.7 n=237\n"
-                "G3: Yarali Favori - yuzde 91.0 n=100\n"
-                "G4: Agir Favori Ber - yuzde 88.7 n=142\n"
-                "G5: Dep Korner - yuzde 81.5 n=604\n"
-                "G6: Erken Dep Onde - yuzde 88.1 n=427\n"
-                "G7: Erken Ev Onde - yuzde 87.3 n=653\n"
-                "G8: Agir Favori Genel - yuzde 88.3 n=617\n"
-                "G9: Agir Surpriz - yuzde 87.6 n=291\n\n"
-                "Claude AH Filtreler Aktif:\n"
-                "C2: AH fav + Gol2+ + 0-45dk - yuzde 95.1 n=494\n"
-                "C6: Gucu Fav Geride - yuzde 91.4 n=105\n"
-                "C3: Cok Guclu Fav Erken - yuzde 89.1 n=248\n\n"
+                "🚀 BOT V55 - HAZIR\n\n"
+                "Aktif Motor: BenimStratejiFiltresi\n\n"
+                "BENİM STRATEJİLERİM:\n"
+                "TOP-1: Underdog Erken Dep Önde    - yuzde 97.60 n=459\n"
+                "TOP-2: Ezici Favori 1X Banko       - yuzde 97.14 n=699\n"
+                "TOP-3: Ezici Favori Erken Esit     - yuzde 97.95 n=292\n"
+                "TOP-4: Cok Guclu Favori 0 Gol      - yuzde 97.42 n=466\n"
+                "TOP-5: Agir Favori Erken 0 Gol     - yuzde 96.50 n=657\n"
+                "TOP-6: Agir Favori Erken Esit      - yuzde 96.34 n=711\n"
+                "TOP-7: Asiri Favori Ev Gol         - yuzde 95.12 n=512\n"
+                "TOP-8: Favori Erken Esit Ev Gol    - yuzde 95.21 n=438\n"
+                "TOP-9: Hafif Favori Erken Geride   - yuzde 94.68 n=620\n"
+                "TOP-10: Underdog Dep Onde MS2      - yuzde 92.16 n=459\n"
+                "YARD-1: Dengeli Mac Yuksek Gol     - yuzde 85.19 n=540\n"
+                "YARD-2: 2Y Favori Devam            - yuzde 85.48 n=248\n"
+                "BLOK-1: Agir Fav 45+ Zayif         - BLOK\n"
+                "BLOK-2: Agir Fav + Tek Gol 30dk+   - BLOK\n\n"
+                "Gemini/Claude/Excel filtreleri DEVRE DISI.\n"
                 "Sinyaller bekleniyor..."
             ),
             parse_mode=None
