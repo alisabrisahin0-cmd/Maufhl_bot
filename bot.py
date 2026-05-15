@@ -1,9 +1,13 @@
+# ============================================================================
+# Ana Motor - Sadece Benim Stratejilerim
+# ============================================================================
+
 import asyncio
 import aiohttp
 import logging
 
 # ---------------------------
-# Sinyal geçmişi (duplicate kontrol)
+# Duplicate kontrolü
 # ---------------------------
 class SinyalGecmisi:
     def __init__(self):
@@ -20,13 +24,13 @@ class SinyalGecmisi:
 sinyal_gecmisi = SinyalGecmisi()
 
 # ---------------------------
-# BetsAPI fetch + backoff
+# Mevcut BetsAPI fetch ve backoff kodu aynen kalacak
 # ---------------------------
 MAX_BACKOFF = 300
 BASE_BACKOFF = 60
 backoff_counter = 0
 
-async def fetch_inplay_with_odds(session, url):
+async def fetch_inplay(session, url):
     global backoff_counter
     try:
         async with session.get(url) as resp:
@@ -35,13 +39,12 @@ async def fetch_inplay_with_odds(session, url):
                 wait_time = min(BASE_BACKOFF * backoff_counter, MAX_BACKOFF)
                 logging.warning(f"BetsAPI 429 — rate limit, {wait_time}s bekleniyor")
                 return []
-
             elif resp.status == 200:
                 backoff_counter = 0
                 data = await resp.json()
                 results = []
                 for mac in data.get("results", []):
-                    mac['odds'] = mac.get("odds", {})  # MS, AH, Alt/Üst gibi
+                    mac['odds'] = mac.get("odds", {})
                     results.append(mac)
                 return results
             else:
@@ -89,7 +92,7 @@ class BenimStratejilerim:
             "risk": "Orta",
             "blok": False
         }
-        # Buraya diğer benim Excel Top10 filtrelerim eklenebilir
+        # Gerekirse diğer filtreler burada eklenebilir
     ]
 
     @staticmethod
@@ -100,10 +103,8 @@ class BenimStratejilerim:
         dep_gol = mac_data.get("away_goals", 0)
         odds = mac_data.get("odds", {})
 
-        # Sadece basit örnek: AH veya skor kriteri eklenebilir
         results = []
         for s in BenimStratejilerim.STRATEGIES:
-            # Örnek tetikleme kuralı: AH pozitif veya negatif durumu
             if "Underdog" in s["filtre_adi"] and ah >= 1.0:
                 results.append(s)
             elif "Favori" in s["filtre_adi"] and ah <= -1.0:
@@ -113,7 +114,7 @@ class BenimStratejilerim:
         return results
 
 # ---------------------------
-# Ana döngü
+# Ana motor loop
 # ---------------------------
 async def ana_dongu():
     url = "https://api.betsapi.com/events/inplay"
@@ -121,7 +122,8 @@ async def ana_dongu():
         loop_sayaci = 0
         while True:
             loop_sayaci += 1
-            aktif_maclar = await fetch_inplay_with_odds(session, url)
+            aktif_maclar = await fetch_inplay(session, url)
+
             if not aktif_maclar:
                 logging.info(f"Loop #{loop_sayaci} | inplay matches: 0 (429 veya veri yok)")
                 await asyncio.sleep(5)
@@ -141,7 +143,16 @@ async def ana_dongu():
 
                 for f in filtreler:
                     if not sinyal_gecmisi.zaten_gonderildi_mi(event_id, f["filtre_adi"]):
-                        mesaj = f"📊 STRATEJİ: {f['filtre_adi']}\n⚽ {ev_adi} {ev_gol}-{dep_gol} {dep_adi}\n🏆 {league}\n🎯 Market: {f['market_oneri']}\n📊 Başarı: %{f['basari_orani']}\n📦 Örneklem: n={f['orneklem']}\n⚠️ Risk: {f['risk']}\n📝 {f['aciklama']}"
+                        mesaj = (
+                            f"📊 STRATEJİ: {f['filtre_adi']}\n"
+                            f"⚽ {ev_adi} {ev_gol}-{dep_gol} {dep_adi}\n"
+                            f"🏆 {league}\n"
+                            f"🎯 Market: {f['market_oneri']}\n"
+                            f"📊 Başarı: %{f['basari_orani']}\n"
+                            f"📦 Örneklem: n={f['orneklem']}\n"
+                            f"⚠️ Risk: {f['risk']}\n"
+                            f"📝 {f['aciklama']}"
+                        )
                         sinyal_gecmisi.kaydet(event_id, f["filtre_adi"])
                         print(mesaj)
 
