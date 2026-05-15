@@ -1352,6 +1352,13 @@ class TeamStats:
         return round(ham * (45 / max(dakika, 1)), 2)
 
     def detect_fake_pressure(self) -> bool:
+        # ── 8. KESİN İPTAL KURALLARI (Sahte Baskı — Kısır Atak) ────────────
+        # DA>=45 ve SOT=0 → devasa atak hacmi ama hiç isabetli şut yok
+        # Bu tamamen kısır / verimsiz baskıdır, sinyal üretmez
+        if self.da >= 45 and self.sot == 0: return True
+        # DA>=60 ve SOT<=3 → 60 atakta sadece 3 isabetli şut, oran çok düşük
+        if self.da >= 60 and self.sot <= 3: return True
+        # ── Mevcut kurallar (korundu) ────────────────────────────────────────
         if self.da > 8 and self.sot == 0: return True
         if self.da > 0 and self.sot > 0 and self.da / self.sot > 8: return True
         if self.korner >= 8 and self.sot < 5: return True
