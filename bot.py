@@ -2638,6 +2638,20 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
             logger.debug(f"Excel oran filtre hata: {ex}")
         # ─────────────────────────────────────────────────────────────────
 
+        # TOP 10 FİLTRELERİ KONTROL
+        try:
+            iy_gol_tahmini = toplam_gol if dk < 46 else max(0, toplam_gol - 1)
+            top10_sonuc = excel_top10_filtresi.kontrol_et(dk, ah_val, kayit_ev, kayit_dep, iy_gol_tahmini)
+            if top10_sonuc:
+                top10_key = f"TOP10_{top10_sonuc.filtre_adi[:10]}"
+                if not sinyal_gecmisi.zaten_gonderildi_mi(event_id, int(dk), top10_key):
+                    top10_mesaj = ExcelTop10Filtresi.mesaj_olustur(ev_adi, dep_adi, skor, dk, league_name, top10_sonuc)
+                    sinyal_gecmisi.kaydet(event_id, int(dk), top10_key)
+                    logger.info(f"🏆 TOP 10 TETIKLENDI: {top10_sonuc.filtre_adi}")
+                    return mesaj, None, top10_mesaj
+        except Exception as ex:
+            logger.debug(f"Excel Top 10 hata: {ex}")
+
         return mesaj, None, None
 
     except Exception as e:
@@ -2810,12 +2824,12 @@ async def ana_dongu():
                         # 2 veya 3 elemanlı tuple
                         if isinstance(sonuc, tuple):
                             if len(sonuc) == 3:
-                                ana_mesaj, gemini_mesaj, claude_mesaj = sonuc
+                                ana_mesaj, gemini_mesaj, extra_mesaj = sonuc
                             else:
                                 ana_mesaj, gemini_mesaj = sonuc
-                                claude_mesaj = None
+                                extra_mesaj = None
                         else:
-                            ana_mesaj, gemini_mesaj, claude_mesaj = sonuc, None, None
+                            ana_mesaj, gemini_mesaj, extra_mesaj = sonuc, None, None
                         # 1. Ana sinyal
                         if ana_mesaj:
                             await telegram_queue.put((CHAT_ID, ana_mesaj))
@@ -2823,10 +2837,10 @@ async def ana_dongu():
                         if gemini_mesaj:
                             await asyncio.sleep(0.5)
                             await telegram_queue.put((CHAT_ID, gemini_mesaj))
-                        # 3. Claude AH bildirimi
-                        if claude_mesaj:
+                        # 3. Excel Top 10 / Claude AH / Excel Oran bildirimi
+                        if extra_mesaj:
                             await asyncio.sleep(0.5)
-                            await telegram_queue.put((CHAT_ID, claude_mesaj))
+                            await telegram_queue.put((CHAT_ID, extra_mesaj))
                     except Exception as e:
                         logger.error(f"isle:{e}")
 
