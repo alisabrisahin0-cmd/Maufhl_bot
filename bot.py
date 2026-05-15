@@ -2897,6 +2897,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                                 ev_gol, dep_gol, league_name, event_id)
             sinyaller.append(s)
 
+        ah_data = None   # V55: her zaman tanımlı olsun
         if 20 <= dk <= 80 and event_id:
             ah_data = await asian_handicap_cek(event_id, session)
             # [K3] Ortasaha kördüğümü kalkanı
@@ -2916,6 +2917,56 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                 sinyaller.append(s)
 
         sinyal = SinyalKonsensus.sec(sinyaller)
+
+        # ── [V55-BAĞIMSIZ] BENİM STRATEJİM ─────────────────────────────────
+        # V52 sinyaline BAĞLI DEĞİL — ah_data varsa AH değerini kullan,
+        # yoksa 0.0 ile çalış. Blok: return None. Pozitif: kendi mesajını gönder.
+        try:
+            _b_ah   = float(ah_data['ev_handicap']) if ah_data else 0.0
+            _b_odds: float = None
+            if ah_data:
+                _o = float(ah_data.get('ev_oran', 0) or 0)
+                if _o > 1.0:
+                    _b_odds = _o
+
+            benim_sonuc = benim_strateji_filtresi.kontrol_et(
+                dakika        = dk,
+                ah_degeri     = _b_ah,
+                kayit_ev_gol  = ev_gol,
+                kayit_dep_gol = dep_gol,
+                ev_corner     = int(v.get('ev_korner', 0) or 0),
+                dep_corner    = int(v.get('dep_korner', 0) or 0),
+                iy_toplam_gol = toplam_gol if dk < 46 else max(0, toplam_gol - 1),
+                league        = league_name,
+                odds          = _b_odds,
+            )
+            if benim_sonuc:
+                if benim_sonuc.blok:
+                    logger.debug(
+                        f"BenimStrateji BLOK [{benim_sonuc.kategori}]: "
+                        f"{benim_sonuc.filtre_adi}")
+                    return None   # Blok → hiç mesaj gönderme
+                benim_key = f"BENIM_{benim_sonuc.kategori}_{int(dk // 5) * 5}"
+                if not sinyal_gecmisi.zaten_gonderildi_mi(
+                        event_id, int(dk), benim_key):
+                    benim_mesaj = BenimStratejiFiltresi.mesaj_olustur(
+                        ev_adi=ev_adi, dep_adi=dep_adi,
+                        skor=skor, dk=dk,
+                        league=league_name,
+                        sonuc=benim_sonuc,
+                    )
+                    sinyal_gecmisi.kaydet(event_id, int(dk), benim_key)
+                    logger.info(
+                        f"✅ BENİM STRATEJİM [{benim_sonuc.kategori}]: "
+                        f"{benim_sonuc.filtre_adi} | "
+                        f"%{benim_sonuc.basari_orani:.1f} n={benim_sonuc.orneklem}")
+                    # V52 sinyali olmasa bile bağımsız gönder
+                    return None, benim_mesaj, None
+        except Exception as eb:
+            logger.debug(f"BenimStrateji hata: {eb}")
+            import traceback; logger.debug(traceback.format_exc())
+        # ── BENİM STRATEJİM bitti — V52 devam ──────────────────────────────
+
         if not sinyal: return None
 
         # Skor bonusu + lig çarpanı
