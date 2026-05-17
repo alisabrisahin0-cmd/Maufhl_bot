@@ -425,6 +425,16 @@ def classify_live_signal(
     # 1) HARD PASS / IGNORE — önce kontrol et, erken çık
     # ══════════════════════════════════════════════════════════════════════
 
+    # [V57-FINAL] GOL OLACAK (S): 50. dakikadan önce Telegram sinyali yok.
+    # Erken dakikalarda oran/value şiştiği için A/A+ üretme.
+    if tip == "Gol Olacak (S)" and dakika < 50:
+        return {
+            "sinyal": "PASS",
+            "puan":   0,
+            "neden":  [f"{dakika:.0f}dk < 50: Gol Olacak marketi için value yok, Telegram kapalı"],
+            "market": "—",
+        }
+
     # GOL OLACAK (S): tek gol + dakika < 60 → value yok, IGNORE
     # 60. dakikadan önce 1-0 / 0-1 sinyali güvenilir değil.
     if tip == "Gol Olacak (S)" and toplam_gol == 1 and dakika < 60:
@@ -549,9 +559,10 @@ def classify_live_signal(
         # Eski fav-yönsüz A+ kuralı kaldırıldı.
         # Ev golünde güçlü AH sadece fav == EV ise değerli sayılır.
 
-        # A : skor 0-0 + korner 0-3 + AH ters yönde değil
-        if ev_gol == 0 and dep_gol == 0 and toplam_korner <= 3 and fav != "DEP":
-            neden.append("A koşulu: skor 0-0, korner≤3 → temiz başlangıç")
+        # A : skor 0-0 + korner 0-3 + EV yönlü AH desteği
+        # AH yok / DENGE iken Genoa gibi maçlar A üretmemeli.
+        if ev_gol == 0 and dep_gol == 0 and toplam_korner <= 3 and fav == "EV" and ah_abs >= 0.75:
+            neden.append("A koşulu: 0-0, korner≤3, EV yönlü AH≥0.75")
             return {
                 "sinyal": "A",
                 "puan":   50,
@@ -2090,6 +2101,16 @@ def self_test_classify_live_signal():
             "args": ("Ev Gol Atacak (S)", 50, 1, 0, 1, 4, -0.50),
             "expected": "PASS",
         },
+        {
+            "name": "5dk 0-0 Gol Olacak <50 PASS",
+            "args": ("Gol Olacak (S)", 5, 0, 0, 0, 0, -1.75),
+            "expected": "PASS",
+        },
+        {
+            "name": "45dk Ev Gol 0-0 AH=0 B/log-only",
+            "args": ("Ev Gol Atacak (S)", 45, 0, 0, 1, 2, 0.0),
+            "expected_in": ("B", "LOW_VALUE", "PASS"),
+        },
     ]
 
     logger.info("[SELFTEST] classify_live_signal() testleri başladı")
@@ -2566,7 +2587,7 @@ async def ana_dongu():
                 "  ⛔  PASS — Oynama / riskli\n"
                 "  🔕  IGNORE — Erken / değersiz\n\n"
                 "KURALLAR:\n"
-                "• Gol Olacak(S): gol=1+korner≤3+AH≥1.25+dk≥60 → A+\n"
+                "• Gol Olacak(S): dk<50 kapalı; dk≥60+gol=1+korner≤3+AH≥1.25 → A+\n"
                 "• Ev Gol Atacak(S): AH yönü EV değilse A üretilmez\n"
                 "• Dep Gol Atacak(S): dk≤15 veya 0-0 → B\n"
                 "• 0-59dk+gol=1+Gol Olacak → IGNORE\n"
