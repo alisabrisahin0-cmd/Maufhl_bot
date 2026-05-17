@@ -182,7 +182,7 @@ def _skorline_bonusu(tip: str, ev_gol: int, dep_gol: int) -> int:
     """Skor durumuna göre bonus/ceza"""
     toplam = ev_gol + dep_gol
     if tip == "Gol Olacak (S)":
-        if toplam == 1:   return +15   # 1-0 veya 0-1
+        # tek gol bonusu kaldırıldı: 60dk altında IGNORE, üstünde nötr
         if toplam >= 3:   return -8    # 2-1, 2-2, 3-0, 3-1 gibi
         return 0
     else:  # Ev Gol Atacak (S) / Dep Gol Atacak (S)
@@ -256,27 +256,14 @@ def classify_live_signal(
     # 1) HARD PASS / IGNORE — önce kontrol et, erken çık
     # ══════════════════════════════════════════════════════════════════════
 
-    # [V57-FIX-3] GOL OLACAK (S) — eski agresif IGNORE kaldırıldı, granüler kural
-    # 0-30dk + tek gol + yüksek korner (≥7) → IGNORE (baskı kısır, value yok)
-    if tip == "Gol Olacak (S)" and dakika <= 30 and toplam_gol == 1 and toplam_korner >= 7:
+    # GOL OLACAK (S): tek gol + dakika < 60 → value yok, IGNORE
+    # 60. dakikadan önce 1-0 / 0-1 sinyali güvenilir değil.
+    if tip == "Gol Olacak (S)" and toplam_gol == 1 and dakika < 60:
         return {
             "sinyal": "IGNORE",
             "puan":   0,
-            "neden":  ["0-30dk + tek gol + yüksek korner (≥7): value zayıf, kısır baskı"],
+            "neden":  [f"{dakika:.0f}dk + tek gol: 60dk altında value taşımıyor"],
             "market": "—",
-        }
-
-    # [V57-FIX-3] 31-45dk + tek gol + düşük korner + AH güçlü → A sinyali üret
-    if (tip == "Gol Olacak (S)"
-            and 31 <= dakika <= 45
-            and toplam_gol == 1
-            and toplam_korner <= 6
-            and ah_abs >= 0.75):
-        return {
-            "sinyal": "A",
-            "puan":   55,
-            "neden":  ["31-45dk + tek gol + korner≤6 + AH≥0.75 → güçlü devam golü beklentisi"],
-            "market": "Gol Olacak / MS 0.5 Üst",
         }
 
     # EV GOL ATACAK (S) — 46-60dk + AH ≈ ±0.5 → PASS
@@ -1845,31 +1832,31 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
             mac_entropisi.olay_ekle(event_id, dk, da, sot,
                                      home_stats.korner + away_stats.korner)
 
-        # Modülleri çalıştır
+        # ── [V57] ENABLE_LEGACY_MODULES = False → eski hat tamamen kapalı ──────
+        # IYGolModule / EvDepGolModule / IY2Module / SinyalKonsensus çağrıları
+        # bu flag False iken hiç çalışmaz, "💎 SİNYAL" mesajı üretilmez.
+        ENABLE_LEGACY_MODULES = False
+
         sinyaller: List[SignalResult] = []
+        sinyal = None
+        ah_data = None
 
-        if 15 <= dk <= 40:
-            s = IYGolModule.check(dk, ev_gol, dep_gol,
-                                  home_stats, away_stats, league_name, event_id)
-            sinyaller.append(s)
+        if ENABLE_LEGACY_MODULES:
+            if 15 <= dk <= 40:
+                s = IYGolModule.check(dk, ev_gol, dep_gol,
+                                      home_stats, away_stats, league_name, event_id)
+                sinyaller.append(s)
 
-        if (46 <= dk <= 65) or (76 <= dk <= 90):
-            s = IY2Module.check(dk, home_stats, away_stats,
-                                ev_gol, dep_gol, league_name, event_id)
-            sinyaller.append(s)
+            if (46 <= dk <= 65) or (76 <= dk <= 90):
+                s = IY2Module.check(dk, home_stats, away_stats,
+                                    ev_gol, dep_gol, league_name, event_id)
+                sinyaller.append(s)
 
-        ah_data = None   # V56: her zaman tanımlı olsun
-        # AH çekme: dk<20 için de BenimStrateji'ye lazım → genişlet
+        # AH çekme her zaman lazım (classify_live_signal için de)
         if event_id and (5 <= dk <= 80):
             ah_data = await asian_handicap_cek(event_id, session)
-            # [K3] Ortasaha kördüğümü kalkanı (sadece V52 modülleri için)
-            if ah_data and 60 <= dk <= 75:
-                _ah_ev = ah_data.get('ev_handicap', 99)
-                if -0.25 <= _ah_ev <= 0.25 and ev_gol == dep_gol:
-                    logger.debug(f'Ortasaha kördüğümü: {dk}dk AH={_ah_ev} ber={ev_gol}-{dep_gol}')
-                    # V52'yi durdur ama BenimStrateji devam etsin (aşağıda)
-                    # -> sinyal = None olacak, o halde sadece BenimStrateji kontrol edilecek
-                    pass
+
+        if ENABLE_LEGACY_MODULES:
             if ah_data and 20 <= dk <= 80:
                 market_odds = ah_data.get('ev_oran', 0.0)
                 s = EvDepGolModule.check(
@@ -1879,8 +1866,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                     ev_gol, dep_gol, market_odds
                 )
                 sinyaller.append(s)
-
-        sinyal = SinyalKonsensus.sec(sinyaller)
+            sinyal = SinyalKonsensus.sec(sinyaller)
 
         # ══════════════════════════════════════════════════════════════════
         # [V57] CANLI SİNYAL SINIFLANDIRICI — classify_live_signal()
@@ -1938,122 +1924,10 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
         except Exception as _cs_err:
             logger.debug(f"[V57] Sınıflandırıcı hata: {_cs_err}")
             import traceback; logger.debug(traceback.format_exc())
-        # ── V57 bitti — V52 devam ───────────────────────────────────────
-
-        if not sinyal: return None
-
-        # Skor bonusu + lig çarpanı
-        sinyal.score = round(sinyal.score + skor_bonus, 2)
-        if skor_bonus != 0:
-            sinyal.reason += f" | SKOR({skor_bonus:+.0f})"
-
-        lig_c = LeagueFilter.get_league_multiplier(league_name)
-        sinyal.score = round(sinyal.score * lig_c, 2)
-        if lig_c != 1.0:
-            sinyal.reason += f" | LİG(×{lig_c})"
-
-        # [K4] ELMAS 1: Kusursuz Şok — %96.5 Win Rate
-        # 15-30dk + toplamCorner<=4 + ağır favori geride
-        _toplam_korner = v.get('ev_korner', 0) + v.get('dep_korner', 0)
-        _ah_guncel = sinyal.details.get('ah_degeri', None)
-        if _ah_guncel is None:
-            # AH yoksa sinyalin ratio bilgisinden tahmin et
-            _ah_guncel = 0.0
-        if (15 <= dk <= 30
-                and _toplam_korner <= 4
-                and (abs(_ah_guncel) >= 0.75)
-                and ev_gol < dep_gol):   # ağır favori geride
-            sinyal.score = round(sinyal.score + 8.0, 2)
-            sinyal.reason += ' | 💎 Kusursuz Şok +8'
-            logger.debug(f'K4 Kusursuz Sok tetiklendi: dk={dk} korner={_toplam_korner} ah={_ah_guncel}')
-
-        # [K5] ELMAS 2: Gizli Boğulma — %87.1 Win Rate
-        # AH<=-0.25 + favori geride + favorinin korneri rakibinden 3+ fazla
-        _ev_korner  = v.get('ev_korner', 0)
-        _dep_korner = v.get('dep_korner', 0)
-        if (_ah_guncel <= -0.25           # ev sahibi favori
-                and ev_gol < dep_gol       # ev sahibi (favori) geride
-                and _ev_korner - _dep_korner >= 3):   # favori kornerde baskın
-            sinyal.score = round(sinyal.score + 6.0, 2)
-            sinyal.reason += ' | 💎 Gizli Bogulma +6'
-            logger.debug(f'K5 Gizli Bogulma tetiklendi: ev_k={_ev_korner} dep_k={_dep_korner}')
-
-        # Puan barajı
-        if sinyal.score < puan_baraji_hesapla(dk, league_name): return None
-
-        # Çift sinyal kontrolü
-        if event_id and sinyal_gecmisi.zaten_gonderildi_mi(
-                event_id, dk, sinyal.signal_type.value): return None
-
-        # [R6] Entropi özeti
-        entropi_val, entropi_msg = mac_entropisi.entropi_hesapla(
-            event_id or '', dk)
-
-        sinyal_logger.info(
-            f"{ev_adi} vs {dep_adi} | {dk}' | "
-            f"{sinyal.signal_type.value} | P:{sinyal.score:.1f} | "
-            f"H:{entropi_val:.2f} | {lig_c}x"
-        )
-
-        # AI analizi
-        mac_v = {
-            'ev_adi': ev_adi, 'dep_adi': dep_adi,
-            'skor': skor, 'dakika': dk,
-            'ta': ta, 'da': da, 'sot': sot, 'gol': toplam_gol,
-            'ev_ta': v['ev_ta'],  'dep_ta': v['dep_ta'],
-            'ev_da': v['ev_da'],  'dep_da': v['dep_da'],
-            'ev_sot': v['ev_sot'],'dep_sot': v['dep_sot'],
-            'ev_gol': ev_gol,     'dep_gol': dep_gol,
-        }
-        ai_analiz, ai_src = await ai_analiz_yap(mac_v, session)
-
-        nesine = nesine_lig_kontrolu(league_name, ev_adi, dep_adi)
-
-        # Detay satırları
-        details = sinyal.details
-        detail_str = ""
-        if details.get('ah_split'):
-            detail_str += f"• AH Split: {details['ah_split']}\n"
-        if details.get('xt') is not None:
-            detail_str += f"• Proxy xT: {details['xt']:.3f}\n"
-        if details.get('fpressure') is not None:
-            detail_str += f"• F_pressure: {details['fpressure']:.2f}\n"
-        if details.get('ah_velocity') is not None:
-            detail_str += f"• AH Velocity: {details['ah_velocity']:+.4f}\n"
-            sinyal.reason = sinyal.reason.replace("_", "_")
-        mesaj = (
-            f"💎 *SİNYAL — Puan: {sinyal.score:.1f}*\n"
-            f"⚽ {ev_adi} {skor} {dep_adi}\n"
-            f"🏆 {league_name}\n"
-            f"⏱ {dk}' | 🎯 {sinyal.signal_type.value}\n"
-            f"{'─'*30}\n"
-            f"📊 *İstatistikler:*\n"
-            f"• TA: {ta} (E:{v['ev_ta']}, D:{v['dep_ta']})\n"
-            f"• DA: {da} (E:{v['ev_da']}, D:{v['dep_da']})\n"
-            f"• SOT: {sot} (E:{v['ev_sot']}, D:{v['dep_sot']})\n"
-            f"• Gol: {toplam_gol} (E:{ev_gol}, D:{dep_gol})\n"
-            f"• Köşe: E:{v.get('ev_korner',0)}, D:{v.get('dep_korner',0)}\n"
-            f"• Entropi: {entropi_val:.2f} — {entropi_msg}\n"
-            f"{detail_str}"
-            f"{'─'*30}\n"
-            f"🎯 *{sinyal.reason}*\n"
-        )
-
-        if details.get('tvps'):
-            mesaj += f"{'─'*30}\n📈 *TVPS:* {details['tvps']}\n"
-
-        if ai_analiz:
-            mesaj += f"{'─'*30}\n🤖 *{ai_src}:*\n{ai_analiz}\n"
-
-        nesine_str = "✅ Nesine'de VAR" if nesine else "ℹ️ Nesine'de yok"
-        mesaj += f"{'─'*30}\n{nesine_str}"
-
-        if event_id:
-            sinyal_gecmisi.kaydet(event_id, dk, sinyal.signal_type.value)
-
-        # V57: classify_live_signal() bloğu yukarıda çalıştı.
-        # V52 sinyali üretildiyse de döndür.
-        return mesaj, None, None
+        # ── V57 bitti ───────────────────────────────────────────────────────
+        # ENABLE_LEGACY_MODULES = False → eski "💎 SİNYAL" yolu tamamen kapalı.
+        # Buraya düşen her çağrı sessizce None döner.
+        return None
 
     except Exception as e:
         logger.error(f"mac_analiz_et:{e}")
