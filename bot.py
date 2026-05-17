@@ -2489,18 +2489,17 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                            f"dk={dk:.0f}: sinyal kaydedildi, Telegram'a gönderilmedi")
                 return None
 
-            # [V57-FIX-6] NEUTRAL kategorisinde: sadece A+ ve (flag false ise) A+
-            # WHITELIST kategorisinde: A+/A gönder
-            sendable_sinyaller = None
-            
+            # ── [V58-FIX] Gönderim sınıflarını lig kategorisine göre belirle ──
+            # WHITELIST  : A+, A
+            # NEUTRAL    : sadece A+ (flag=True, default) veya A+,A (flag=False)
+            # Diğer      : A+, A (güvenli default)
             if lig_category == LeagueCategory.WHITELIST:
                 sendable_sinyaller = ("A+", "A")
             elif lig_category == LeagueCategory.NEUTRAL:
-                if SEND_NEUTRAL_LEAGUE_A_ONLY:
-                    sendable_sinyaller = ("A+",)
-                else:
-                    sendable_sinyaller = ("A+", "A")
-            
+                sendable_sinyaller = ("A+",) if SEND_NEUTRAL_LEAGUE_A_ONLY else ("A+", "A")
+            else:
+                sendable_sinyaller = ("A+", "A")
+
             for _tip in ("Gol Olacak (S)", "Ev Gol Atacak (S)", "Dep Gol Atacak (S)"):
                 _cs_mesaj, _cs_sonuc = canli_sinyal_siniflandir(
                     tip        = _tip,
@@ -2515,44 +2514,59 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                     skor       = skor,
                     league     = league_name,
                 )
+                _sinyal_kodu = _cs_sonuc["sinyal"]
+
                 logger.debug(
-                    f"[V57] {_tip} → {_cs_sonuc['sinyal']} "
+                    f"[V57] {_tip} → {_sinyal_kodu} "
                     f"(puan={_cs_sonuc['puan']})")
 
-                # NEUTRAL liglerde filtre uygula
-                if lig_category == LeagueCategory.NEUTRAL and sendable_sinyaller:
-                    if _cs_sonuc["sinyal"] not in sendable_sinyaller:
-                        logger.info(f"[NEUTRAL] {_cs_sonuc['sinyal']} sinyal "
-                                   f"Telegram'a gönderilmedi (sadece A+ kabul)")
-                        continue
+                # ── FIX-1: PASS/IGNORE/LOW_VALUE → sessiz atla (log spam yok) ──
+                if _sinyal_kodu in ("PASS", "IGNORE", "LOW_VALUE"):
+                    continue
 
-                    # Neutral liglerde takım golü + hedef takım zaten önde = Telegram kapalı
-                    if _tip in ("Ev Gol Atacak (S)", "Dep Gol Atacak (S)") and _target_team_is_leading(_tip, ev_gol, dep_gol):
-                        logger.info(f"[NEUTRAL] {_tip} hedef takım önde, Telegram'a gönderilmedi")
-                        continue
-
-                # Sadece bu lig kategorisi için gönderilebilir sınıflar aday olabilir.
-                if _cs_sonuc["sinyal"] in (sendable_sinyaller or ("A+", "A")):
-                    if _cs_mesaj:
-                        _adaylar.append(
-                            (_cs_sonuc["puan"], _cs_sonuc["sinyal"], _cs_mesaj, _tip))
-                elif _cs_sonuc["sinyal"] == "B":
+                # ── FIX-2: B → sadece logla, Telegram'a gönderme ──────────────
+                if _sinyal_kodu == "B":
                     logger.info(
-                        f"[V57] B sinyal (logda): {_tip} dk={dk:.0f} "
+                        f"[V57] B sinyal (log): {_tip} dk={dk:.0f} "
                         f"puan={_cs_sonuc['puan']} AH={_cs_ah:+.2f}")
+                    continue
+
+                # ── FIX-3: Gönderilemeyen sınıf → logla ama devam et ──────────
+                if _sinyal_kodu not in sendable_sinyaller:
+                    logger.info(
+                        f"[{lig_category.value}] {_sinyal_kodu} sinyal "
+                        f"Telegram'a gönderilmedi "
+                        f"(kabul: {'/'.join(sendable_sinyaller)})")
+                    continue
+
+                # ── NEUTRAL: hedef takım zaten önde ise atla ─────────────────
+                if (lig_category == LeagueCategory.NEUTRAL
+                        and _tip in ("Ev Gol Atacak (S)", "Dep Gol Atacak (S)")
+                        and _target_team_is_leading(_tip, ev_gol, dep_gol)):
+                    logger.info(
+                        f"[NEUTRAL] {_tip} hedef takım önde, gönderilmedi")
+                    continue
+
+                # ── FIX-4: _cs_mesaj None ise adaya ekleme ───────────────────
+                if _cs_mesaj:
+                    _adaylar.append(
+                        (_cs_sonuc["puan"], _sinyal_kodu, _cs_mesaj, _tip))
 
             if _adaylar:
-                # En yüksek puanlı tek adayı seç
                 _adaylar.sort(reverse=True, key=lambda x: x[0])
                 _en_iyi_puan, _en_iyi_sinyal, _en_iyi_mesaj, _en_iyi_tip = _adaylar[0]
 
-                _dup_key = f"V57_{_en_iyi_tip}_{ev_gol}-{dep_gol}"
+                # ── FIX-5: dup key'e AH değeri ekle (skor+tip+AH benzersiz) ──
+                _ah_str  = f"{_cs_ah:+.2f}".replace(".", "_")
+                _dup_key = (f"V57_{_en_iyi_tip[:3]}_"
+                            f"{ev_gol}-{dep_gol}_AH{_ah_str}")
                 if not sinyal_gecmisi.zaten_gonderildi_mi(
                         event_id, int(dk), _dup_key):
                     sinyal_gecmisi.kaydet(event_id, int(dk), _dup_key)
                     logger.info(
-                        f"[V57] ✅ EN İYİ: {_en_iyi_tip} → {_en_iyi_sinyal} | "
-                        f"puan={_en_iyi_puan} dk={dk:.0f} skor={skor} AH={_cs_ah:+.2f}")
+                        f"[V57] ✅ {_en_iyi_tip} → {_en_iyi_sinyal} | "
+                        f"puan={_en_iyi_puan} dk={dk:.0f} "
+                        f"skor={skor} AH={_cs_ah:+.2f}")
                     return _en_iyi_mesaj, None, None
 
         except Exception as _cs_err:
@@ -2591,289 +2605,4 @@ async def mac_isle(bot, mac_data: dict,
         # Sadece e-spor / fake / virtual maçlar burada erken atlanır.
         # Kadın/genç/rezerv ANALYSIS_ONLY maçlar erken atlanmaz; analiz için kaydedilir.
         _allowed0, _cat0, _reason0 = LeagueFilter.check_league(league_name, ev_adi, dep_adi)
-        if _cat0 == LeagueCategory.HARD_REJECT:
-            logger.debug(f"[LEAGUE] Hard reject erken çıkış: {league_name} [{_reason0}]")
-            return None
-        # ────────────────────────────────────────────────────────────
-        timer       = mac_data.get('timer', {})
-        dk          = guvenli_int(timer.get('tm',0)) if isinstance(timer,dict) else 0
-        skor        = mac_data.get('ss','0-0') or '0-0'
-
-        stats_data = None
-        try:
-            async with session.get(
-                f"https://api.betsapi.com/v1/event/view"
-                f"?token={BETSAPI_TOKEN}&event_id={mac_id}",
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as r:
-                if r.status == 200:
-                    ed = await r.json()
-                    if ed.get('success') == 1:
-                        res = ed.get('results', [])
-                        if res:
-                            s = res[0].get('stats', {})
-                            if s and isinstance(s, dict): stats_data = s
-        except Exception: pass
-
-        if not stats_data:
-            stats_data = mac_data.get('stats', {})
-        if not stats_data or not isinstance(stats_data, dict): return None
-
-        ev_v = dep_v = None
-        if 'corners' in stats_data and isinstance(stats_data.get('corners'), list):
-            r = VeriKorumaKatmani().yeni_format_parse(stats_data)
-            if r: ev_v, dep_v = r
-
-        if not ev_v or not dep_v:
-            ev_v  = stats_data.get('1', {})
-            dep_v = stats_data.get('2', {})
-        if not ev_v or not dep_v: return None
-
-        if (sum(1 for k in ev_v  if k.startswith('S')) == 0 or
-                sum(1 for k in dep_v if k.startswith('S')) == 0): return None
-
-        sonuc = await mac_analiz_et(
-            ev_v, dep_v, ev_adi, dep_adi, skor, dk,
-            bot, session, event_id=mac_id, league_name=league_name)
-        # mac_analiz_et (mesaj, gemini_mesaj) tuple veya None döndürür
-        if sonuc is None:
-            return None
-        if isinstance(sonuc, tuple):
-            return sonuc   # (ana_mesaj, gemini_mesaj)
-        return (sonuc, None)
-
-    except Exception as e:
-        logger.error(f"mac_isle:{e}"); return None
-
-
-# ============================================================================
-# TELEGRAM QUEUE
-# ============================================================================
-
-telegram_queue: asyncio.Queue = None
-
-
-async def telegram_gondericisi(bot):
-    """Telegram sıra işleyici — Legacy mesaj filtreleri uygulanır"""
-    legacy_patterns = [
-        "💎 SİNYAL",
-        "🎯 EV GOL",
-        "🎯 DEP GOL",
-        "🎯 İY2 GOL",
-        "🎯 İY GOL",
-        "TVPS:",
-        "Proxy xT",
-        "Fpressure",
-    ]
-    
-    while True:
-        try:
-            chat_id, mesaj = await telegram_queue.get()
-            
-            # [V57-FIX-11] Legacy mesaj engelleme
-            if BLOCK_LEGACY_DIAMOND_MESSAGES and isinstance(mesaj, str):
-                if any(p in mesaj for p in legacy_patterns):
-                    logger.warning(f"[V57] Legacy format mesaj engellendi: {mesaj[:50]}...")
-                    telegram_queue.task_done()
-                    continue
-            
-            try:
-                await bot.send_message(
-                    chat_id=chat_id, text=mesaj, parse_mode="Markdown")
-            except Exception as e:
-                # Markdown hatası → parse_mode kaldır ve tekrar dene
-                try:
-                    clean = mesaj.replace("*","").replace("_","").replace("`","")
-                    await bot.send_message(chat_id=chat_id, text=clean, parse_mode=None)
-                except Exception as e2:
-                    logger.error(f"TG fallback hatasi: {e2}")
-            finally:
-                telegram_queue.task_done()
-            await asyncio.sleep(1.5)
-        except Exception as e:
-            logger.error(f"TG queue:{e}")
-            await asyncio.sleep(1)
-
-
-# ============================================================================
-# ANA DÖNGÜ
-# ============================================================================
-
-async def ana_dongu():
-    global telegram_queue
-    telegram_queue = asyncio.Queue()
-    asyncio.create_task(loop_monitor.monitor())
-
-    try:
-        bot = Bot(token=TELEGRAM_TOKEN)
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=(
-                "🚀 BOT V57 — CANLI SİNYAL SINIFLANDIRICI\n\n"
-                "Motor: classify_live_signal()\n\n"
-                "SİNYAL TİPLERİ:\n"
-                "  🔥🔥 A+  — En güçlü (%95+)\n"
-                "  🔥  A   — Güçlü (%90+)\n"
-                "  ✅  B   — Orta (%75-90)\n"
-                "  ⚠️  LOW_VALUE — Düşük güven\n"
-                "  ⛔  PASS — Oynama / riskli\n"
-                "  🔕  IGNORE — Erken / değersiz\n\n"
-                "KURALLAR:\n"
-                "• Gol Olacak(S): dk<50 kapalı; dk≥60+gol=1+korner≤3+AH≥1.25 → A+\n"
-                "• Ev Gol Atacak(S): AH yönü EV değilse A üretilmez\n"
-                "• Dep Gol Atacak(S): dk≤15 veya 0-0 → B\n"
-                "• 0-59dk+gol=1+Gol Olacak → IGNORE\n"
-                "• 46-60dk+AH±0.5+Ev/Dep → PASS\n"
-                "• 46-60dk+3-0+Ev Gol → HARD_PASS\n• Team-goal AH yönü zorunlu: ters AH cezalı\n• Neutral ligler: sadece A+; hedef takım öndeyse takım golü kapalı\n• Kadın/genç/rezerv: ANALYSIS_ONLY, Telegram kapalı\n\n"
-                "Eski Gemini/Claude/Excel filtreleri KALDIRILDI.\n"
-                "Sinyaller bekleniyor..."
-            ),
-            parse_mode=None
-        )
-        
-        # [V57] Self-test fonksiyonlarını çalıştır
-        logger.info("[V57] Self-test başlatılıyor...")
-        test1_ok = self_test_classify_live_signal()
-        test2_ok = self_test_league_categories()
-        
-        if test1_ok and test2_ok:
-            logger.info("[V57] ✅ Tüm self-test'ler başarılı")
-        else:
-            logger.warning("[V57] ⚠️ Bazı self-test'ler başarısız — ayarları kontrol et")
-    
-    except Exception as e:
-        logger.error(f"Bot başlatma:{e}"); return
-
-    asyncio.create_task(telegram_gondericisi(bot))
-
-    async with aiohttp.ClientSession() as session:
-        dongu        = 0
-        aktif_maclar: list = []
-
-        while True:
-            dongu += 1
-            try:
-                async with api_rate_limiter:
-                    async with session.get(
-                        f"https://api.betsapi.com/v1/events/inplay"
-                        f"?sport_id=1&token={BETSAPI_TOKEN}",
-                        timeout=aiohttp.ClientTimeout(total=30)
-                    ) as resp:
-                        if resp.status != 200:
-                            await asyncio.sleep(60); continue
-                        data = await resp.json()
-
-                aktif_maclar = esnek_liste_duzelt(data.get('results', []))
-                logger.info(f"#{dongu} | {len(aktif_maclar)} maç")
-
-                async def isle(mac_data):
-                    try:
-                        sonuc = await mac_isle(bot, mac_data, session)
-                        if sonuc is None:
-                            return
-                        # Tek mesaj veya tuple (ana, gemini)
-                        # 2 veya 3 elemanlı tuple
-                        if isinstance(sonuc, tuple):
-                            if len(sonuc) == 3:
-                                ana_mesaj, gemini_mesaj, extra_mesaj = sonuc
-                            else:
-                                ana_mesaj, gemini_mesaj = sonuc
-                                extra_mesaj = None
-                        else:
-                            ana_mesaj, gemini_mesaj, extra_mesaj = sonuc, None, None
-                        # 1. Ana sinyal
-                        if ana_mesaj:
-                            await telegram_queue.put((CHAT_ID, ana_mesaj))
-                        # 2. Gemini ek bildirimi
-                        if gemini_mesaj:
-                            await asyncio.sleep(0.5)
-                            await telegram_queue.put((CHAT_ID, gemini_mesaj))
-                        # 3. Excel Top 10 / Claude AH / Excel Oran bildirimi
-                        if extra_mesaj:
-                            await asyncio.sleep(0.5)
-                            await telegram_queue.put((CHAT_ID, extra_mesaj))
-                    except Exception as e:
-                        logger.error(f"isle:{e}")
-
-                await asyncio.gather(
-                    *[isle(m) for m in aktif_maclar],
-                    return_exceptions=True)
-
-                if dongu % 10 == 0:
-                    s = api_rate_limiter.stats()
-                    logger.info(f"Rate:{s['total']} req, {s['throttled']} throttled")
-                    veri_koruma.istatistik()
-
-            except Exception as e:
-                logger.error(f"Ana:{e}")
-                import traceback; logger.error(traceback.format_exc())
-
-            await asyncio.sleep(dongu_suresi_hesapla(aktif_maclar))
-
-
-# ============================================================================
-# GİRİŞ
-# ============================================================================
-
-
-# ============================================================================
-# V57 SELF TEST
-# ============================================================================
-
-def self_test_v57():
-    """V57 çekirdek sınıflandırıcı hızlı testleri."""
-    tests = [
-        ("29dk 1-0 Gol Olacak ignore", ("Gol Olacak (S)", 29, 1, 0, 1, 2, -0.75), "IGNORE"),
-        ("59dk 1-0 Gol Olacak ignore", ("Gol Olacak (S)", 59, 1, 0, 1, 2, -1.25), "IGNORE"),
-        ("60dk 1-0 Gol Olacak A/A+", ("Gol Olacak (S)", 60, 1, 0, 1, 2, -1.25), ("A+", "A")),
-        ("50dk Ev Gol AH0.5 PASS", ("Ev Gol Atacak (S)", 50, 1, 0, 1, 4, -0.50), "PASS"),
-        ("Pisa ev gol ters AH Telegram dışı", ("Ev Gol Atacak (S)", 21, 0, 1, 1, 2, +1.00), ("B", "LOW_VALUE", "PASS")),
-        ("Napoli dep gol yön doğru ama hedef önde → Telegram dışı", ("Dep Gol Atacak (S)", 21, 0, 1, 1, 2, +1.00), ("LOW_VALUE", "B")),
-        ("Lipno 0-2 erken Gol Olacak IGNORE", ("Gol Olacak (S)", 12, 0, 2, 0, 0, +1.00), "IGNORE"),
-    ]
-
-    ok_all = True
-    for name, args, expected in tests:
-        sonuc = classify_live_signal(*args)
-        got = sonuc["sinyal"]
-        if isinstance(expected, tuple):
-            ok = got in expected
-        else:
-            ok = got == expected
-        ok_all = ok_all and ok
-        logger.info(f"[SELFTEST] {name}: got={got}, expected={expected}, ok={ok}")
-    return ok_all
-
-
-def self_test_league_categories():
-    """LeagueCategory hızlı testleri."""
-    tests = [
-        ("England Women Super League", "Chelsea Women", "Arsenal Women", LeagueCategory.ANALYSIS_ONLY),
-        ("Germany Bundesliga", "Bayern", "Dortmund", LeagueCategory.WHITELIST),
-        ("Taiwan Premier League", "A", "B", LeagueCategory.NEUTRAL),
-        ("Esoccer Battle", "A", "B", LeagueCategory.HARD_REJECT),
-        ("Poland III Liga", "Lech Poznan II", "Zawisza Bydgoszcz", LeagueCategory.ANALYSIS_ONLY),
-    ]
-    ok_all = True
-    for league, home, away, expected in tests:
-        allowed, category, reason = LeagueFilter.check_league(league, home, away)
-        ok = category == expected
-        ok_all = ok_all and ok
-        logger.info(f"[LEAGUE TEST] {league} / {home}-{away}: got={category.value}, expected={expected.value}, ok={ok}, reason={reason}")
-    return ok_all
-
-
-if __name__ == "__main__":
-    logger.info("🚀 Bot V57 Başlatılıyor...")  # [V57-FIX-6]
-    logger.info(
-        f"TG:{'✅' if TELEGRAM_TOKEN else '❌'} | "
-        f"Chat:{'✅' if CHAT_ID else '❌'} | "
-        f"API:{'✅' if BETSAPI_TOKEN else '❌'}"
-    )
-    try:
-        asyncio.run(ana_dongu())
-    except KeyboardInterrupt:
-        logger.info("Bot durduruldu")
-    except Exception as e:
-        logger.error(f"Kritik:{e}")
-        import traceback; logger.error(traceback.format_exc())
+        if _c
