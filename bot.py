@@ -1,3 +1,4 @@
+# -*- coding: ascii -*-
 import asyncio, aiohttp, os, logging, re, time, math, sqlite3
 from telegram import Bot
 from enum import Enum
@@ -6,12 +7,12 @@ from typing import Optional, Dict, List, Tuple
 from collections import deque
 
 # ============================================================================
-# BOT V57 — TEMİZ SÜRÜM
+# BOT V57 ? TEMIZ SURUM
 # ============================================================================
 # Motor  : classify_live_signal()  (A+ / A / B / LOW_VALUE / PASS / IGNORE)
 # Tipler : Gol Olacak (S) / Ev Gol Atacak (S) / Dep Gol Atacak (S)
-# Kaldırıldı: GeminiFiltresi, ClaudeFiltresi, ExcelFiltreler,
-#             BenimStratejiFiltresi, BlokFiltresi — tüm atıl kod
+# Kaldirildi: GeminiFiltresi, ClaudeFiltresi, ExcelFiltreler,
+#             BenimStratejiFiltresi, BlokFiltresi ? tum atil kod
 # ============================================================================
 
 LIG_CARPANLARI = {
@@ -19,7 +20,7 @@ LIG_CARPANLARI = {
     'champions league':     1.85,
     'uefa champions':       1.85,
     'eredivisie':           1.50,
-    'türkiye 1 lig':        1.35,
+    'turkiye 1 lig':        1.35,
     'turkiye 1 lig':        1.35,
     '1. lig':               1.35,
     'serie b':              1.30,
@@ -32,10 +33,10 @@ LIG_CARPANLARI = {
     'premier league':       0.85,
     'england premier':      0.85,
     'super lig':            0.75,
-    'süper lig':            0.75,
+    'super lig':            0.75,
     'brazil':               0.65,
     'serie a brazil':       0.65,
-    # [ALTIN LİGLER — Kural 6]
+    # [ALTIN LIGLER ? Kural 6]
     'wales championship south': 1.50,
     'thailand division 2':      1.50,
     'saudi arabia pro league':  1.50,
@@ -47,15 +48,15 @@ KARANTINA_LIGLER = [
     'oman', 'kuwait', 'iraq stars', 'afghanistan',
 ]
 
-# [R8] TVPS feature ağırlıkları (tarihsel kalibrasyona göre)
+# [R8] TVPS feature agirliklari (tarihsel kalibrasyona gore)
 TVPS_AGIRLIKLAR = {
     'da_ivmesi':          +2.1,
     'proxy_xt':           +3.5,
     'ah_momentum':        +2.8,
     'true_rlm':           +3.0,
     'corner_deficit':     +2.5,
-    'sahte_baski':        -4.0,   # negatif ağırlık
-    'fpressure_endeks':   -3.5,   # negatif ağırlık
+    'sahte_baski':        -4.0,   # negatif agirlik
+    'fpressure_endeks':   -3.5,   # negatif agirlik
     'entropi_yuksek':     +1.8,
     'skor_altin':         +2.0,
     'lig_carpan_bonus':   +1.5,
@@ -67,13 +68,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Hassas URL'lerin loga düşmesini azalt.
+# Hassas URL'lerin loga dusmesini azalt.
 for _noisy_logger in ("httpx", "httpcore", "telegram", "telegram.ext"):
     logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
 
 
 def mask_secret_url(value: str) -> str:
-    """Log güvenliği: Telegram bot token gibi hassas parçaları maskele."""
+    """Log guvenligi: Telegram bot token gibi hassas parcalari maskele."""
     if not isinstance(value, str):
         return value
     value = re.sub(r'(bot)\d{6,}:[A-Za-z0-9_-]+', r'\1***TOKEN***', value)
@@ -84,30 +85,30 @@ def mask_secret_url(value: str) -> str:
 sinyal_logger = logging.getLogger('sinyal')
 _sh = logging.StreamHandler()
 _sh.setFormatter(logging.Formatter(
-    '🎯 %(asctime)s SINYAL | %(message)s', '%H:%M:%S'))
+    '[TGT] %(asctime)s SINYAL | %(message)s', '%H:%M:%S'))
 sinyal_logger.addHandler(_sh)
 sinyal_logger.setLevel(logging.INFO)
 
 # ============================================================================
-# V57 GLOBAL FLAGS (Açılı Kapalı Denetim)
+# V57 GLOBAL FLAGS (Acili Kapali Denetim)
 # ============================================================================
 ENABLE_CLASSIFY_ENGINE        = True   # Sadece classify_live_signal() motoru aktif
-ENABLE_LEGACY_MODULES         = False  # eski IY/EvDep/IY2/Konsensus kapalı
+ENABLE_LEGACY_MODULES         = False  # eski IY/EvDep/IY2/Konsensus kapali
 SEND_B_SIGNALS                = False  # B sinyalleri sadece log, Telegram'a gitmez
 SEND_NEUTRAL_LEAGUE_A_ONLY    = True   # Neutral liglerde sadece A+ Telegram'a gider
-REQUIRE_AH_FOR_SIGNAL         = True   # AH verisi yoksa sinyal üretilmez
-BLOCK_LEGACY_DIAMOND_MESSAGES = True   # 💎 SİNYAL formatı Telegram'a gitmez
-ENABLE_ANALYSIS_ONLY_LOGGING  = True   # Kadın/genç/rezerv ligleri analysis loglanır
+REQUIRE_AH_FOR_SIGNAL         = True   # AH verisi yoksa sinyal uretilmez
+BLOCK_LEGACY_DIAMOND_MESSAGES = True   # [VIP] SINYAL formati Telegram'a gitmez
+ENABLE_ANALYSIS_ONLY_LOGGING  = True   # Kadin/genc/rezerv ligleri analysis loglanir
 ENABLE_WOMEN_MAIN_TELEGRAM    = False
 # ============================================================================
-# V57 FINAL V5 — STRATEJİ UYUM KATMANI
+# V57 FINAL V5 ? STRATEJI UYUM KATMANI
 # ============================================================================
-# Gönderilen canlı bildirimlerden çıkan son güvenlik kararları:
-# - Gol Olacak: 50.dk altı Telegram kapalı
-# - Ev/Dep Gol: 15.dk altı Telegram kapalı
-# - Ev/Dep Gol: AH yok/zayıf/dengede A/A+ yok
-# - Alt liglerde Ev/Dep Gol Telegram kapalı
-# - Skorline 0-0 + dakika + korner tek başına A yapamaz
+# Gonderilen canli bildirimlerden cikan son guvenlik kararlari:
+# - Gol Olacak: 50.dk alti Telegram kapali
+# - Ev/Dep Gol: 15.dk alti Telegram kapali
+# - Ev/Dep Gol: AH yok/zayif/dengede A/A+ yok
+# - Alt liglerde Ev/Dep Gol Telegram kapali
+# - Skorline 0-0 + dakika + korner tek basina A yapamaz
 TEAM_GOAL_MIN_TELEGRAM_MINUTE = 15
 TEAM_GOAL_MIN_A_MINUTE        = 20
 TEAM_GOAL_REQUIRED_AH_ABS     = 0.75
@@ -115,10 +116,10 @@ TEAM_GOAL_STRONG_AH_ABS       = 1.25
 BLOCK_LOWER_TIER_TEAM_GOALS   = True
 BLOCK_TEAM_GOAL_IF_AH_WEAK    = True
 GOL_OLACAK_MIN_TELEGRAM_MINUTE = 50
-  # Kadın ligleri şimdi ana Telegram'a gitmez
+  # Kadin ligleri simdi ana Telegram'a gitmez
 
 # ============================================================================
-# KONFIGÜRASYON
+# KONFIGURASYON
 # ============================================================================
 
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
@@ -129,25 +130,25 @@ GEMINI_API_KEY_1 = os.getenv("GEMINI_API_KEY_1") or None
 GEMINI_API_KEY_2 = os.getenv("GEMINI_API_KEY_2") or None
 GEMINI_API_KEY_3 = os.getenv("GEMINI_API_KEY_3") or None
 
-print(f"🔑 Grok={'✅' if GROK_API_KEY else '❌'} | "
+print(f"[KEY] Grok={'[OK]' if GROK_API_KEY else '[ERR]'} | "
       f"Gemini={sum(1 for k in [GEMINI_API_KEY_1,GEMINI_API_KEY_2,GEMINI_API_KEY_3] if k)}/3")
 print(f"[V57 FLAGS] ClassifyEngine={ENABLE_CLASSIFY_ENGINE} | "
       f"Legacy={ENABLE_LEGACY_MODULES} | "
       f"ReqAH={REQUIRE_AH_FOR_SIGNAL}")
 
 # ============================================================================
-# LİG KATEGORİ NUMARALANDIRMASI
+# LIG KATEGORI NUMARALANDIRMASI
 # ============================================================================
 class LeagueCategory(Enum):
-    """Lig kategorileri — Telegram politikasını belirler"""
+    """Lig kategorileri ? Telegram politikasini belirler"""
     HARD_REJECT    = "HARD_REJECT"      # Tamamen reddedilir (esport, vb)
-    ANALYSIS_ONLY  = "ANALYSIS_ONLY"    # Kadın/genç/rezerv — veri kaydedilir, Telegram kapalı
-    KARANTINA      = "KARANTINA"        # Şimdilik Telegram kapalı (Brazil, Kenya, vb)
-    NEUTRAL        = "NEUTRAL"         # Liste dışı normal ligler (sadece A+ gönder)
-    WHITELIST      = "WHITELIST"       # Güvenilir büyük ligler (A+/A gönder)
+    ANALYSIS_ONLY  = "ANALYSIS_ONLY"    # Kadin/genc/rezerv ? veri kaydedilir, Telegram kapali
+    KARANTINA      = "KARANTINA"        # Simdilik Telegram kapali (Brazil, Kenya, vb)
+    NEUTRAL        = "NEUTRAL"         # Liste disi normal ligler (sadece A+ gonder)
+    WHITELIST      = "WHITELIST"       # Guvenilir buyuk ligler (A+/A gonder)
 
 # ============================================================================
-# KALICI SİNYAL GEÇMİŞİ
+# KALICI SINYAL GECMISI
 # ============================================================================
 class SinyalGecmisi:
     def __init__(self, db_path="sinyaller.db"):
@@ -192,11 +193,11 @@ class SinyalGecmisi:
             pass
 
 
-# [V57-FIX-1] Global instance — class bittikten hemen sonra tanımla
+# [V57-FIX-1] Global instance ? class bittikten hemen sonra tanimla
 sinyal_gecmisi = SinyalGecmisi()
 
 # ============================================================================
-# ANALYSIS_ONLY SINYALLER (Kadın/Genç/Rezerv Ligleri)
+# ANALYSIS_ONLY SINYALLER (Kadin/Genc/Rezerv Ligleri)
 # ============================================================================
 class AnalysisOnlySignals:
     def __init__(self, db_path="sinyaller.db"):
@@ -251,11 +252,11 @@ class AnalysisOnlySignals:
                 logger.info(f"[ANALYSIS_ONLY] {league_name}/{home_team} vs {away_team} "
                            f"{dakika}dk: {sinyal_dict.get('sinyal')} kaydedildi")
         except Exception as e:
-            logger.error(f"[ANALYSIS_ONLY] Kayıt hatası: {e}")
+            logger.error(f"[ANALYSIS_ONLY] Kayit hatasi: {e}")
 
 analysis_only_signals = AnalysisOnlySignals()
 
-# ── Puan tabloları ──────────────────────────────────────────────────────────
+# -- Puan tablolari ----------------------------------------------------------
 _DAKIKA_PUAN = {
     (0,  15): +25,
     (16, 30): +23,
@@ -285,7 +286,7 @@ def _korner_puani(toplam_korner: int) -> int:
     return 0
 
 def _ah_puani(ah_abs: float) -> int:
-    """AH mutlak değerine göre puan"""
+    """AH mutlak degerine gore puan"""
     if ah_abs >= 2.0:        return +25
     if ah_abs >= 1.25:       return +22   # 1.25 / 1.50 / 1.75
     if ah_abs >= 1.0:        return +10
@@ -295,27 +296,27 @@ def _ah_puani(ah_abs: float) -> int:
     return 0
 
 def _skorline_bonusu(tip: str, ev_gol: int, dep_gol: int) -> int:
-    """Skor durumuna göre bonus/ceza
+    """Skor durumuna gore bonus/ceza
     
-    [V57-FIX-3] Tek gol bonusu KESİN KALDIRILDı.
+    [V57-FIX-3] Tek gol bonusu KESIN KALDIRILDi.
     - Gol Olacak: dk<60 zaten IGNORE
-    - Gol Olacak: dk>=60 özel A/A+ kurallarıyla değerlendirilir
-    - 3+ gol cezası devam eder
+    - Gol Olacak: dk>=60 ozel A/A+ kurallariyla degerlendirilir
+    - 3+ gol cezasi devam eder
     """
     toplam = ev_gol + dep_gol
     if tip == "Gol Olacak (S)":
-        # Tek gol bonusu YOK (erken 1-0 / 0-1 maçları tekrar A'ya dönüştürmemek için)
+        # Tek gol bonusu YOK (erken 1-0 / 0-1 maclari tekrar A'ya donusturmemek icin)
         if toplam >= 3:   return -8    # 2-1, 2-2, 3-0, 3-1 gibi
         return 0
     elif tip in ("Ev Gol Atacak (S)", "Dep Gol Atacak (S)"):
-        # 0-0 bonusu: Saf başlangıç => gol potansiyeli yüksek
+        # 0-0 bonusu: Saf baslangic => gol potansiyeli yuksek
         if ev_gol == 0 and dep_gol == 0:
             return +15
         return 0
     return 0
 
 def _sinif_belirle(puan: int) -> str:
-    """Ham puanı sınıfa çevir"""
+    """Ham puani sinifa cevir"""
     if puan >= 60:  return "A+"
     if puan >= 45:  return "A"
     if puan >= 25:  return "B"
@@ -325,10 +326,10 @@ def _sinif_belirle(puan: int) -> str:
 
 def ah_favori_yonu(ah: float) -> str:
     """
-    [V57-FIX-4] BetsAPI ev_handicap işaretinden favori yönü tespit et.
-    ah < -0.25 → ev favori (ev -handicap alıyor)
-    ah > +0.25 → deplasman favori
-    arası     → dengeli maç
+    [V57-FIX-4] BetsAPI ev_handicap isaretinden favori yonu tespit et.
+    ah < -0.25 -> ev favori (ev -handicap aliyor)
+    ah > +0.25 -> deplasman favori
+    arasi     -> dengeli mac
     """
     if ah < -0.25:
         return "EV"
@@ -340,31 +341,31 @@ def ah_favori_yonu(ah: float) -> str:
 
 def _ah_puani_yonlu(tip: str, ah: float) -> Tuple[int, str]:
     """
-    AH puanını market yönüne göre verir.
-    Gol Olacak takım bağımsızdır; Ev/Dep Gol Atacak ise AH yönüyle aynı tarafta olmalıdır.
+    AH puanini market yonune gore verir.
+    Gol Olacak takim bagimsizdir; Ev/Dep Gol Atacak ise AH yonuyle ayni tarafta olmalidir.
     """
     ah_abs = abs(ah)
     fav = ah_favori_yonu(ah)
 
     if tip == "Gol Olacak (S)":
         p = _ah_puani(ah_abs)
-        return p, f"AH({ah:+.2f}): takım bağımsız {p:+d}"
+        return p, f"AH({ah:+.2f}): takim bagimsiz {p:+d}"
 
     if tip == "Ev Gol Atacak (S)":
         if fav == "EV":
             p = _ah_puani(ah_abs)
-            return p, f"AH({ah:+.2f}): EV favori, Ev Gol için {p:+d}"
+            return p, f"AH({ah:+.2f}): EV favori, Ev Gol icin {p:+d}"
         if fav == "DENGE":
-            return 0, f"AH({ah:+.2f}): denge, Ev Gol için +0"
-        return -20, f"AH({ah:+.2f}): DEP favori, Ev Gol için -20"
+            return 0, f"AH({ah:+.2f}): denge, Ev Gol icin +0"
+        return -20, f"AH({ah:+.2f}): DEP favori, Ev Gol icin -20"
 
     if tip == "Dep Gol Atacak (S)":
         if fav == "DEP":
             p = _ah_puani(ah_abs)
-            return p, f"AH({ah:+.2f}): DEP favori, Dep Gol için {p:+d}"
+            return p, f"AH({ah:+.2f}): DEP favori, Dep Gol icin {p:+d}"
         if fav == "DENGE":
-            return 0, f"AH({ah:+.2f}): denge, Dep Gol için +0"
-        return -20, f"AH({ah:+.2f}): EV favori, Dep Gol için -20"
+            return 0, f"AH({ah:+.2f}): denge, Dep Gol icin +0"
+        return -20, f"AH({ah:+.2f}): EV favori, Dep Gol icin -20"
 
     return 0, f"AH({ah:+.2f}): +0"
 
@@ -379,29 +380,29 @@ def _target_team_is_leading(tip: str, ev_gol: int, dep_gol: int) -> bool:
 
 def _leading_team_goal_penalty(tip: str, ev_gol: int, dep_gol: int, dakika: float) -> Tuple[int, str]:
     """
-    Takım golü marketinde hedef takım zaten öndeyse value düşer.
-    Bu özellikle erken favori golü spam'ini azaltır.
+    Takim golu marketinde hedef takim zaten ondeyse value duser.
+    Bu ozellikle erken favori golu spam'ini azaltir.
     """
     if tip == "Ev Gol Atacak (S)" and ev_gol > dep_gol:
         if dakika < 30:
-            return -8, "Ev zaten önde: erken devam golü value cezası -8"
+            return -8, "Ev zaten onde: erken devam golu value cezasi -8"
         if dakika < 60:
-            return -12, "Ev zaten önde: oyun kontrolü riski -12"
-        return -18, "Ev zaten önde: geç dakika rölanti riski -18"
+            return -12, "Ev zaten onde: oyun kontrolu riski -12"
+        return -18, "Ev zaten onde: gec dakika rolanti riski -18"
 
     if tip == "Dep Gol Atacak (S)" and dep_gol > ev_gol:
         if dakika < 30:
-            return -8, "Dep zaten önde: erken devam golü value cezası -8"
+            return -8, "Dep zaten onde: erken devam golu value cezasi -8"
         if dakika < 60:
-            return -12, "Dep zaten önde: oyun kontrolü riski -12"
-        return -18, "Dep zaten önde: geç dakika rölanti riski -18"
+            return -12, "Dep zaten onde: oyun kontrolu riski -12"
+        return -18, "Dep zaten onde: gec dakika rolanti riski -18"
 
     return 0, ""
 
 
 
 # ============================================================================
-# V57 FINAL V5 — ALT LİG / TAKIM GOLÜ YARDIMCI FİLTRELER
+# V57 FINAL V5 ? ALT LIG / TAKIM GOLU YARDIMCI FILTRELER
 # ============================================================================
 
 LOWER_TIER_LEAGUE_PATTERNS = [
@@ -426,7 +427,7 @@ def is_lower_tier_league(league_name: str) -> bool:
     return any(re.search(pat, ll) for pat in LOWER_TIER_LEAGUE_PATTERNS)
 
 def _target_team_trailing(tip: str, ev_gol: int, dep_gol: int) -> bool:
-    """Takım golü marketinde hedef takım geride mi?"""
+    """Takim golu marketinde hedef takim geride mi?"""
     if tip == "Ev Gol Atacak (S)":
         return ev_gol < dep_gol
     if tip == "Dep Gol Atacak (S)":
@@ -434,13 +435,13 @@ def _target_team_trailing(tip: str, ev_gol: int, dep_gol: int) -> bool:
     return False
 
 def _target_team_level(tip: str, ev_gol: int, dep_gol: int) -> bool:
-    """Takım golü marketinde hedef takım berabere mi?"""
+    """Takim golu marketinde hedef takim berabere mi?"""
     if tip in ("Ev Gol Atacak (S)", "Dep Gol Atacak (S)"):
         return ev_gol == dep_gol
     return False
 
 def _team_goal_ah_supported(tip: str, ah: float, min_abs: float = None) -> bool:
-    """Ev/Dep Gol marketinde AH yönü hedef takımı destekliyor mu?"""
+    """Ev/Dep Gol marketinde AH yonu hedef takimi destekliyor mu?"""
     min_abs = TEAM_GOAL_REQUIRED_AH_ABS if min_abs is None else min_abs
     fav = ah_favori_yonu(ah)
     ah_abs = abs(ah)
@@ -464,25 +465,25 @@ def classify_live_signal(
     league_name: str = "",
 ) -> dict:
     """
-    Canlı maç sinyalini sınıflandırır.
+    Canli mac sinyalini siniflandirir.
 
     Parametreler
     ------------
     tip        : "Gol Olacak (S)" | "Ev Gol Atacak (S)" | "Dep Gol Atacak (S)"
-    dakika     : Maç dakikası (0-90)
-    ev_gol     : Ev sahibi gol sayısı
-    dep_gol    : Deplasman gol sayısı
-    ev_corner  : Ev sahibi korner sayısı
-    dep_corner : Deplasman korner sayısı
+    dakika     : Mac dakikasi (0-90)
+    ev_gol     : Ev sahibi gol sayisi
+    dep_gol    : Deplasman gol sayisi
+    ev_corner  : Ev sahibi korner sayisi
+    dep_corner : Deplasman korner sayisi
     ah         : Asian Handicap (pozitif = ev favori, negatif = dep favori)
 
-    Döndürür
+    Dondurur
     --------
     dict:
         sinyal  : "A+" | "A" | "B" | "LOW_VALUE" | "PASS" | "IGNORE"
         puan    : Ham puan (int)
-        neden   : Açıklama dizisi (list[str])
-        market  : Önerilen market (str)
+        neden   : Aciklama dizisi (list[str])
+        market  : Onerilen market (str)
     """
     toplam_gol    = ev_gol + dep_gol
     toplam_korner = ev_corner + dep_corner
@@ -490,84 +491,84 @@ def classify_live_signal(
     neden         = []
     market        = ""
 
-    # [V57-FIX-4] Favori yönü
+    # [V57-FIX-4] Favori yonu
     fav = ah_favori_yonu(ah)
 
-    # ══════════════════════════════════════════════════════════════════════
-    # 1) HARD PASS / IGNORE — önce kontrol et, erken çık
-    # ══════════════════════════════════════════════════════════════════════
+    # ======================================================================
+    # 1) HARD PASS / IGNORE ? once kontrol et, erken cik
+    # ======================================================================
 
-    # [V57-FINAL] GOL OLACAK (S): 50. dakikadan önce Telegram sinyali yok.
-    # Erken dakikalarda oran/value şiştiği için A/A+ üretme.
+    # [V57-FINAL] GOL OLACAK (S): 50. dakikadan once Telegram sinyali yok.
+    # Erken dakikalarda oran/value sistigi icin A/A+ uretme.
     if tip == "Gol Olacak (S)" and dakika < 50:
         return {
             "sinyal": "PASS",
             "puan":   0,
-            "neden":  [f"{dakika:.0f}dk < 50: Gol Olacak marketi için value yok, Telegram kapalı"],
-            "market": "—",
+            "neden":  [f"{dakika:.0f}dk < 50: Gol Olacak marketi icin value yok, Telegram kapali"],
+            "market": "?",
         }
 
-    # [V57-FINAL-V5] GOL OLACAK: 50.dk altı ana Telegram kapalı.
-    # Enskede 5.dk gibi erken A/A+ sinyaller artık çıkmaz.
+    # [V57-FINAL-V5] GOL OLACAK: 50.dk alti ana Telegram kapali.
+    # Enskede 5.dk gibi erken A/A+ sinyaller artik cikmaz.
     if tip == "Gol Olacak (S)" and dakika < GOL_OLACAK_MIN_TELEGRAM_MINUTE:
         return {
             "sinyal": "PASS",
             "puan":   0,
-            "neden":  [f"{dakika:.0f}dk < {GOL_OLACAK_MIN_TELEGRAM_MINUTE}: Gol Olacak marketi için value yok, Telegram kapalı"],
-            "market": "—",
+            "neden":  [f"{dakika:.0f}dk < {GOL_OLACAK_MIN_TELEGRAM_MINUTE}: Gol Olacak marketi icin value yok, Telegram kapali"],
+            "market": "?",
         }
 
-    # [V57-FINAL-V5] TAKIM GOLÜ: 15.dk altı Telegram kapalı.
+    # [V57-FINAL-V5] TAKIM GOLU: 15.dk alti Telegram kapali.
     # Prato/Brentford gibi 5.dk Ev Gol A/A+ spam'i kesilir.
     if _team_goal_market(tip) and dakika < TEAM_GOAL_MIN_TELEGRAM_MINUTE:
         return {
             "sinyal": "PASS",
             "puan":   0,
-            "neden":  [f"{dakika:.0f}dk: takım golü marketi için çok erken, Telegram kapalı"],
-            "market": "—",
+            "neden":  [f"{dakika:.0f}dk: takim golu marketi icin cok erken, Telegram kapali"],
+            "market": "?",
         }
 
-    # [V57-FINAL-V5] ALT LİG: Ev/Dep Gol marketleri ana Telegram kapalı.
-    # Alt ligler oynak olduğu için bu sinyaller analysis/log dışına çıkmasın.
+    # [V57-FINAL-V5] ALT LIG: Ev/Dep Gol marketleri ana Telegram kapali.
+    # Alt ligler oynak oldugu icin bu sinyaller analysis/log disina cikmasin.
     if BLOCK_LOWER_TIER_TEAM_GOALS and _team_goal_market(tip) and is_lower_tier_league(league_name):
         return {
             "sinyal": "PASS",
             "puan":   0,
-            "neden":  [f"{league_name}: alt lig takım golü Telegram kapalı"],
-            "market": "—",
+            "neden":  [f"{league_name}: alt lig takim golu Telegram kapali"],
+            "market": "?",
         }
 
-    # [V57-FINAL-V5] TAKIM GOLÜ: 35.dk öncesi AH yön desteği şart.
-    # AH 0.00 / 0.25 / ters yön ise dakika+korner+0-0 bonusu A yapmasın.
+    # [V57-FINAL-V5] TAKIM GOLU: 35.dk oncesi AH yon destegi sart.
+    # AH 0.00 / 0.25 / ters yon ise dakika+korner+0-0 bonusu A yapmasin.
     if BLOCK_TEAM_GOAL_IF_AH_WEAK and _team_goal_market(tip) and dakika < 35:
         if not _team_goal_ah_supported(tip, ah, TEAM_GOAL_REQUIRED_AH_ABS):
             return {
                 "sinyal": "PASS",
                 "puan":   0,
-                "neden":  [f"{dakika:.0f}dk: takım golü için AH yön desteği yok/zayıf, Telegram kapalı"],
-                "market": "—",
+                "neden":  [f"{dakika:.0f}dk: takim golu icin AH yon destegi yok/zayif, Telegram kapali"],
+                "market": "?",
             }
 
-    # GOL OLACAK (S): tek gol + dakika < 60 → value yok, IGNORE
-    # 60. dakikadan önce 1-0 / 0-1 sinyali güvenilir değil.
+    # GOL OLACAK (S): tek gol + dakika < 60 -> value yok, IGNORE
+    # 60. dakikadan once 1-0 / 0-1 sinyali guvenilir degil.
     if tip == "Gol Olacak (S)" and toplam_gol == 1 and dakika < 60:
         return {
             "sinyal": "IGNORE",
             "puan":   0,
-            "neden":  [f"{dakika:.0f}dk + tek gol: 60dk altında value taşımıyor"],
-            "market": "—",
+            "neden":  [f"{dakika:.0f}dk + tek gol: 60dk altinda value tasimiyor"],
+            "market": "?",
         }
 
-    # GOL OLACAK (S): çok erken 2+ gol = piyasa/value şişmiş olabilir.
+    # GOL OLACAK (S): cok erken 2+ gol = piyasa/value sismis olabilir.
     if tip == "Gol Olacak (S)" and dakika < 30 and toplam_gol >= 2:
         return {
             "sinyal": "IGNORE",
             "puan":   0,
-            "neden":  [f"{dakika:.0f}dk + {toplam_gol} gol: erken skor şişmiş, value düşük"],
-            "market": "—",
+            "neden":  [f"{dakika:.0f}dk + {toplam_gol} gol: erken skor sismis, value dusuk"],
+            "market": "?",
         }
 
-    # GOL OLACAK (S): ilk yarıda fark 2+ ve toplam 2+ gol = erken kopma riski.
+    # GOL OLACAK (S): ilk yarida fark 2+ ve toplam 2+ gol = erken kopma riski.
     if (tip == "Gol Olacak (S)"
             and dakika < 45
             and toplam_gol >= 2
@@ -575,69 +576,69 @@ def classify_live_signal(
         return {
             "sinyal": "IGNORE",
             "puan":   0,
-            "neden":  [f"{dakika:.0f}dk + fark≥2 + toplam gol≥2: erken kopma/value düşük"],
-            "market": "—",
+            "neden":  [f"{dakika:.0f}dk + fark>=2 + toplam gol>=2: erken kopma/value dusuk"],
+            "market": "?",
         }
 
-    # EV GOL ATACAK (S) — 46-60dk + AH ≈ ±0.5 → PASS
+    # EV GOL ATACAK (S) ? 46-60dk + AH ? +-0.5 -> PASS
     if (tip == "Ev Gol Atacak (S)"
             and 46 <= dakika <= 60
             and abs(ah_abs - 0.5) < 0.01):
         return {
             "sinyal": "PASS",
             "puan":   0,
-            "neden":  ["46-60dk + AH±0.5 + Ev Gol Atacak → riskli bölge"],
-            "market": "—",
+            "neden":  ["46-60dk + AH+-0.5 + Ev Gol Atacak -> riskli bolge"],
+            "market": "?",
         }
 
-    # EV GOL ATACAK (S) — 46-60dk + skor 3-0 → HARD_PASS
+    # EV GOL ATACAK (S) ? 46-60dk + skor 3-0 -> HARD_PASS
     if (tip == "Ev Gol Atacak (S)"
             and 46 <= dakika <= 60
             and ev_gol == 3 and dep_gol == 0):
         return {
             "sinyal": "PASS",
             "puan":   0,
-            "neden":  ["46-60dk + 3-0 → HARD_PASS: oyun yönetimi riski"],
-            "market": "—",
+            "neden":  ["46-60dk + 3-0 -> HARD_PASS: oyun yonetimi riski"],
+            "market": "?",
         }
 
-    # DEP GOL ATACAK (S) — 46-60dk + AH ≈ ±0.5 → PASS
+    # DEP GOL ATACAK (S) ? 46-60dk + AH ? +-0.5 -> PASS
     if (tip == "Dep Gol Atacak (S)"
             and 46 <= dakika <= 60
             and abs(ah_abs - 0.5) < 0.01):
         return {
             "sinyal": "PASS",
             "puan":   0,
-            "neden":  ["46-60dk + AH±0.5 + Dep Gol Atacak → riskli bölge"],
-            "market": "—",
+            "neden":  ["46-60dk + AH+-0.5 + Dep Gol Atacak -> riskli bolge"],
+            "market": "?",
         }
 
-    # TAKIM GOLÜ: hedef takım zaten öndeyse erken dakikada value düşük.
-    # Bu, Deren 1-0 gibi favori devam golü spam'ini keser.
+    # TAKIM GOLU: hedef takim zaten ondeyse erken dakikada value dusuk.
+    # Bu, Deren 1-0 gibi favori devam golu spam'ini keser.
     if tip in ("Ev Gol Atacak (S)", "Dep Gol Atacak (S)") and _target_team_is_leading(tip, ev_gol, dep_gol):
         if dakika < 30:
             return {
                 "sinyal": "LOW_VALUE",
                 "puan": 0,
-                "neden": [f"{dakika:.0f}dk + hedef takım zaten önde: takım golü value düşük"],
-                "market": "—",
+                "neden": [f"{dakika:.0f}dk + hedef takim zaten onde: takim golu value dusuk"],
+                "market": "?",
             }
 
-    # ══════════════════════════════════════════════════════════════════════
-    # 2) TİPE GÖRE ÖZEL A+ KURALLARI
-    # ══════════════════════════════════════════════════════════════════════
+    # ======================================================================
+    # 2) TIPE GORE OZEL A+ KURALLARI
+    # ======================================================================
 
-    # ── GOL OLACAK (S) ────────────────────────────────────────────────────
+    # -- GOL OLACAK (S) ----------------------------------------------------
     if tip == "Gol Olacak (S)":
-        market = "Gol Olacak / MS 0.5 Üst"
+        market = "Gol Olacak / MS 0.5 Ust"
 
-        # [V57-FIX-2] A+ : toplam gol=1, korner=0-3, AH mutlak ≥1.25, dk≥60
-        # 60. dakika öncesi 1-0 güvenilir değildir
+        # [V57-FIX-2] A+ : toplam gol=1, korner=0-3, AH mutlak >=1.25, dk>=60
+        # 60. dakika oncesi 1-0 guvenilir degildir
         if (toplam_gol == 1
                 and toplam_korner <= 3
                 and ah_abs >= 1.25
                 and dakika >= 60):
-            neden.append("A+ koşulu: gol=1, korner≤3, AH≥1.25, dk≥60")
+            neden.append("A+ kosulu: gol=1, korner<=3, AH>=1.25, dk>=60")
             return {
                 "sinyal": "A+",
                 "puan":   75,
@@ -645,9 +646,9 @@ def classify_live_signal(
                 "market": market,
             }
 
-        # [V57-FIX-2] A : dk≥60 + AH≥1.0 + gol=1
+        # [V57-FIX-2] A : dk>=60 + AH>=1.0 + gol=1
         if dakika >= 60 and ah_abs >= 1.0 and toplam_gol == 1:
-            neden.append("A koşulu: dk≥60, AH≥1.0, gol=1")
+            neden.append("A kosulu: dk>=60, AH>=1.0, gol=1")
             return {
                 "sinyal": "A",
                 "puan":   50,
@@ -655,13 +656,13 @@ def classify_live_signal(
                 "market": market,
             }
 
-    # ── EV GOL ATACAK (S) ─────────────────────────────────────────────────
+    # -- EV GOL ATACAK (S) -------------------------------------------------
     elif tip == "Ev Gol Atacak (S)":
-        market = "Ev Gol Atacak / Ev Sıradaki Gol"
+        market = "Ev Gol Atacak / Ev Siradaki Gol"
 
-        # [V57-FIX-4] A+ : skor 0-0 + AH mutlak ≥2.0 + ev favori
+        # [V57-FIX-4] A+ : skor 0-0 + AH mutlak >=2.0 + ev favori
         if ev_gol == 0 and dep_gol == 0 and fav == "EV" and ah_abs >= 2.0:
-            neden.append("A+ koşulu: 0-0, ev favori (EV), AH≥2.0 → güçlü ev favori")
+            neden.append("A+ kosulu: 0-0, ev favori (EV), AH>=2.0 -> guclu ev favori")
             return {
                 "sinyal": "A+",
                 "puan":   70,
@@ -669,15 +670,15 @@ def classify_live_signal(
                 "market": market,
             }
 
-        # Eski fav-yönsüz A+ kuralı kaldırıldı.
-        # Ev golünde güçlü AH sadece fav == EV ise değerli sayılır.
+        # Eski fav-yonsuz A+ kurali kaldirildi.
+        # Ev golunde guclu AH sadece fav == EV ise degerli sayilir.
 
-        # A : skor 0-0 + korner 0-3 + EV yönlü AH + dakika olgunluğu
+        # A : skor 0-0 + korner 0-3 + EV yonlu AH + dakika olgunlugu
         # Genoa/AH yok ve Livingston 5.dk gibi sinyaller burada kesilir.
         if (ev_gol == 0 and dep_gol == 0 and toplam_korner <= 3
                 and dakika >= TEAM_GOAL_MIN_A_MINUTE
                 and fav == "EV" and ah_abs >= TEAM_GOAL_REQUIRED_AH_ABS):
-            neden.append("A koşulu: 0-0, korner≤3, dk≥20, EV yönlü AH≥0.75")
+            neden.append("A kosulu: 0-0, korner<=3, dk>=20, EV yonlu AH>=0.75")
             return {
                 "sinyal": "A",
                 "puan":   50,
@@ -685,13 +686,13 @@ def classify_live_signal(
                 "market": market,
             }
 
-    # ── DEP GOL ATACAK (S) ────────────────────────────────────────────────
+    # -- DEP GOL ATACAK (S) ------------------------------------------------
     elif tip == "Dep Gol Atacak (S)":
-        market = "Dep Gol Atacak / Dep Sıradaki Gol"
+        market = "Dep Gol Atacak / Dep Siradaki Gol"
 
-        # [V57-FIX-4] A : skor 0-0 + deplasman favori + AH≥1.25
+        # [V57-FIX-4] A : skor 0-0 + deplasman favori + AH>=1.25
         if ev_gol == 0 and dep_gol == 0 and fav == "DEP" and ah_abs >= 1.25:
-            neden.append("A koşulu: 0-0, deplasman favori (DEP), AH≥1.25")
+            neden.append("A kosulu: 0-0, deplasman favori (DEP), AH>=1.25")
             return {
                 "sinyal": "A",
                 "puan":   50,
@@ -699,9 +700,9 @@ def classify_live_signal(
                 "market": market,
             }
 
-        # B+ : dakika 0-15 + AH ters yönde değil
+        # B+ : dakika 0-15 + AH ters yonde degil
         if dakika <= 15 and fav != "EV":
-            neden.append("B+ koşulu: ilk 15dk — erken açık pozisyon")
+            neden.append("B+ kosulu: ilk 15dk ? erken acik pozisyon")
             return {
                 "sinyal": "B",
                 "puan":   35,
@@ -709,9 +710,9 @@ def classify_live_signal(
                 "market": market,
             }
 
-        # B+ : skor 0-0 + AH ters yönde değil
+        # B+ : skor 0-0 + AH ters yonde degil
         if ev_gol == 0 and dep_gol == 0 and fav != "EV":
-            neden.append("B+ koşulu: skor 0-0 → dep gol potansiyeli")
+            neden.append("B+ kosulu: skor 0-0 -> dep gol potansiyeli")
             return {
                 "sinyal": "B",
                 "puan":   35,
@@ -719,28 +720,28 @@ def classify_live_signal(
                 "market": market,
             }
 
-    # ══════════════════════════════════════════════════════════════════════
-    # 3) GENEL PUANLAMA (özel A+/A eşleşmedi ise)
-    # ══════════════════════════════════════════════════════════════════════
+    # ======================================================================
+    # 3) GENEL PUANLAMA (ozel A+/A eslesmedi ise)
+    # ======================================================================
     puan = 0
 
-    # Dakika puanı
+    # Dakika puani
     dp = _dakika_puani(dakika)
     puan += dp
     neden.append(f"Dakika({dakika:.0f}dk): {dp:+d}")
 
-    # Korner puanı
+    # Korner puani
     kp = _korner_puani(toplam_korner)
     puan += kp
     if kp != 0:
         neden.append(f"Korner({toplam_korner}): {kp:+d}")
 
-    # AH puanı — takım golü marketlerinde yönlü, Gol Olacak'ta takım bağımsız
+    # AH puani ? takim golu marketlerinde yonlu, Gol Olacak'ta takim bagimsiz
     ap, ah_neden = _ah_puani_yonlu(tip, ah)
     puan += ap
     neden.append(ah_neden)
 
-    # Hedef takım zaten öndeyse takım golü marketine value cezası
+    # Hedef takim zaten ondeyse takim golu marketine value cezasi
     lead_penalty, lead_msg = _leading_team_goal_penalty(tip, ev_gol, dep_gol, dakika)
     if lead_penalty:
         puan += lead_penalty
@@ -752,28 +753,28 @@ def classify_live_signal(
     if sb != 0:
         neden.append(f"Skorline({ev_gol}-{dep_gol}): {sb:+d}")
 
-    # Riskli bölge cezası: çok korner (7-9) ek uyarı
+    # Riskli bolge cezasi: cok korner (7-9) ek uyari
     if 7 <= toplam_korner <= 9:
-        neden.append("⚠️ Yüksek korner (7-9): risk bölgesi")
+        neden.append("[WARN] Yuksek korner (7-9): risk bolgesi")
 
-    # [V57-FINAL-V5] Takım golü marketinde AH desteği yok/zayıfsa A/A+ üretme.
-    # Dakika + korner + 0-0 skorline tek başına takım golü sinyali yapamaz.
+    # [V57-FINAL-V5] Takim golu marketinde AH destegi yok/zayifsa A/A+ uretme.
+    # Dakika + korner + 0-0 skorline tek basina takim golu sinyali yapamaz.
     if _team_goal_market(tip) and not _team_goal_ah_supported(tip, ah, TEAM_GOAL_REQUIRED_AH_ABS):
         if puan >= 45:
-            neden.append("A engeli: takım golü için AH yön desteği yok/zayıf, maksimum B/log-only")
+            neden.append("A engeli: takim golu icin AH yon destegi yok/zayif, maksimum B/log-only")
         puan = min(puan, 35)
 
     sinyal = _sinif_belirle(puan)
 
-    # Takım golü marketinde hedef takım zaten öndeyse A+ üretme, maksimum A.
+    # Takim golu marketinde hedef takim zaten ondeyse A+ uretme, maksimum A.
     if sinyal == "A+" and _target_team_is_leading(tip, ev_gol, dep_gol):
         sinyal = "A"
-        neden.append("A+ sınırı: hedef takım zaten önde, maksimum A")
+        neden.append("A+ siniri: hedef takim zaten onde, maksimum A")
 
-    # Market belirleme (genel puanlama yoluna düşenler için)
+    # Market belirleme (genel puanlama yoluna dusenler icin)
     if not market:
         if tip == "Gol Olacak (S)":
-            market = "Gol Olacak / MS 0.5 Üst"
+            market = "Gol Olacak / MS 0.5 Ust"
         elif tip == "Ev Gol Atacak (S)":
             market = "Ev Gol Atacak"
         else:
@@ -787,15 +788,15 @@ def classify_live_signal(
     }
 
 
-# ── Telegram mesaj formatı ───────────────────────────────────────────────────
+# -- Telegram mesaj formati ---------------------------------------------------
 
 _SINYAL_EMOJI = {
-    "A+":        "🔥🔥",
-    "A":         "🔥",
-    "B":         "✅",
-    "LOW_VALUE": "⚠️",
-    "PASS":      "⛔",
-    "IGNORE":    "🔕",
+    "A+":        "[A+][A+]",
+    "A":         "[A+]",
+    "B":         "[OK]",
+    "LOW_VALUE": "[WARN]",
+    "PASS":      "[STOP]",
+    "IGNORE":    "[MUTE]",
 }
 
 def sinyal_mesaj_olustur(
@@ -808,26 +809,26 @@ def sinyal_mesaj_olustur(
     sonuc:      dict,
 ) -> str:
     """
-    classify_live_signal() çıktısından Telegram mesajı üretir.
-    Sadece A+, A ve B sinyalleri Telegram'a gönderilmeli.
+    classify_live_signal() ciktisindan Telegram mesaji uretir.
+    Sadece A+, A ve B sinyalleri Telegram'a gonderilmeli.
     """
-    emoji  = _SINYAL_EMOJI.get(sonuc["sinyal"], "📊")
-    neden_str = "\n".join(f"  • {n}" for n in sonuc["neden"])
+    emoji  = _SINYAL_EMOJI.get(sonuc["sinyal"], "[STAT]")
+    neden_str = "\n".join(f"  * {n}" for n in sonuc["neden"])
     return (
-        f"\n{'═'*32}\n"
-        f"{emoji} *[SİNYAL {sonuc['sinyal']}]* — {tip}\n"
-        f"⚽ {ev_adi} {skor} {dep_adi}\n"
-        f"🏆 {league}\n"
-        f"⏱ Dakika: {dakika:.0f}\n"
-        f"{'─'*30}\n"
-        f"🎯 Market: {sonuc['market']}\n"
-        f"📊 Ham Puan: {sonuc['puan']}\n"
-        f"{'─'*30}\n"
-        f"📋 Gerekçe:\n{neden_str}\n"
+        f"\n{'='*32}\n"
+        f"{emoji} *[SINYAL {sonuc['sinyal']}]* ? {tip}\n"
+        f"[GOL] {ev_adi} {skor} {dep_adi}\n"
+        f"[LIG] {league}\n"
+        f"[DK] Dakika: {dakika:.0f}\n"
+        f"{'-'*30}\n"
+        f"[TGT] Market: {sonuc['market']}\n"
+        f"[STAT] Ham Puan: {sonuc['puan']}\n"
+        f"{'-'*30}\n"
+        f"[LOG] Gerekce:\n{neden_str}\n"
     )
 
 
-# ── Geriye uyumluluk: mac_analiz_et'in çağıracağı ana fonksiyon ─────────────
+# -- Geriye uyumluluk: mac_analiz_et'in cagiracagi ana fonksiyon -------------
 
 def canli_sinyal_siniflandir(
     tip:        str,
@@ -843,10 +844,10 @@ def canli_sinyal_siniflandir(
     league:     str = "",
 ) -> tuple:
     """
-    Wrapper: classify_live_signal() çağırır ve
-    (mesaj_veya_None, sinyal_dict) döndürür.
+    Wrapper: classify_live_signal() cagirir ve
+    (mesaj_veya_None, sinyal_dict) dondurur.
     
-    [V57-FIX-5] Telegram'a gönderilebilecek sınıflar:
+    [V57-FIX-5] Telegram'a gonderilebilecek siniflar:
     - SEND_B_SIGNALS=False (default): sadece A+, A
     - SEND_B_SIGNALS=True: A+, A, B
     """
@@ -866,13 +867,13 @@ def canli_sinyal_siniflandir(
     return None, sonuc
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# [V57-FIX-2] @dataclass eklendi — AHKinetik() boş çağrılabilir hale geldi
+# ============================================================================
+# [V57-FIX-2] @dataclass eklendi ? AHKinetik() bos cagrilabilir hale geldi
 @dataclass
 class AHKinetik:
-    """AH çizgisinin hız ve ivme analizi"""
-    velocity:       float = 0.0   # v_AH = ΔAH/Δt
-    acceleration:   float = 0.0   # a_AH = Δv/Δt
+    """AH cizgisinin hiz ve ivme analizi"""
+    velocity:       float = 0.0   # v_AH = ?AH/?t
+    acceleration:   float = 0.0   # a_AH = ?v/?t
     momentum_score: float = 0.0
     yon:            str   = 'sabit'  # 'daralma' | 'genisleme' | 'sabit'
     clv_proxy:      float = 0.0
@@ -881,12 +882,12 @@ class AHKinetik:
 class AHHareketTakibi:
     """
     [R1] AH kinetik analizi.
-    Her maç için (zaman, ah_ev, oran_ev, oran_dep) geçmişi tutulur.
-    Velocity, acceleration ve momentum score hesaplanır.
+    Her mac icin (zaman, ah_ev, oran_ev, oran_dep) gecmisi tutulur.
+    Velocity, acceleration ve momentum score hesaplanir.
     """
 
-    W1 = 0.6   # velocity ağırlığı
-    W2 = 0.4   # acceleration ağırlığı
+    W1 = 0.6   # velocity agirligi
+    W2 = 0.4   # acceleration agirligi
 
     def __init__(self):
         # {event_id: deque[(zaman, ah_ev, ah_dep, oran_ev, oran_dep)]}
@@ -907,13 +908,13 @@ class AHHareketTakibi:
         if len(kayitlar) < 2:
             return AHKinetik()
 
-        # [R1] Velocity: son iki kayıt arası
+        # [R1] Velocity: son iki kayit arasi
         t1, ah1 = kayitlar[-2][0], kayitlar[-2][1]
         t2, ah2 = kayitlar[-1][0], kayitlar[-1][1]
-        dt = max(t2 - t1, 1.0) / 60   # dakikaya çevir
+        dt = max(t2 - t1, 1.0) / 60   # dakikaya cevir
         v_ah = (ah2 - ah1) / dt
 
-        # Acceleration: üç kayıt varsa
+        # Acceleration: uc kayit varsa
         a_ah = 0.0
         if len(kayitlar) >= 3:
             t0, ah0 = kayitlar[-3][0], kayitlar[-3][1]
@@ -922,7 +923,7 @@ class AHHareketTakibi:
             a_ah    = (v_ah - v_prev) / dt
 
         # [R1] Regression to mean penalizasyonu
-        # Öne geçen takım oyunu yavaşlatır → momentum skoru düşer
+        # One gecen takim oyunu yavaslatir -> momentum skoru duser
         r_penalty = 0.0
         if score_diff >= 1:
             kalan_sure = max(90 - dakika, 1)
@@ -930,14 +931,14 @@ class AHHareketTakibi:
 
         momentum = (v_ah * self.W1) + (a_ah * self.W2) + r_penalty
 
-        # Yön tespiti
+        # Yon tespiti
         fark = abs(guncel_ah) - abs(kayitlar[0][1])
         if abs(fark) < 0.10:
             yon = 'sabit'
         else:
             yon = 'daralma' if fark < 0 else 'genisleme'
 
-        # CLV proxy: ilk giriş fiyatından sapma
+        # CLV proxy: ilk giris fiyatindan sapma
         clv = (abs(kayitlar[0][1]) - abs(guncel_ah)) / max(abs(kayitlar[0][1]), 0.01)
 
         return AHKinetik(
@@ -949,7 +950,7 @@ class AHHareketTakibi:
         )
 
     def implied_prob_drift(self, event_id: str) -> float:
-        """[R10] Son 5dk zımni olasılık değişimi"""
+        """[R10] Son 5dk zimni olasilik degisimi"""
         kayitlar = list(self._gecmis.get(event_id, []))
         if len(kayitlar) < 2:
             return 0.0
@@ -961,23 +962,23 @@ class AHHareketTakibi:
 
     def rlm_skoru(self, event_id: str, home_da_ratio: float,
                   guncel_ah: float) -> Tuple[float, str]:
-        """[R3] True RLM vs Fake RLM ayrımı — basitleştirilmiş logistic proxy"""
+        """[R3] True RLM vs Fake RLM ayrimi ? basitlestirilmis logistic proxy"""
         kinetik = self.kinetik_hesapla(event_id, guncel_ah)
 
         # X1: Volume/ticket delta proxy (da_ratio ile temsil)
         x1 = abs(home_da_ratio - 0.5)
 
-        # X2: Stats divergence — DA ev lehine ama AH ters gidiyorsa
+        # X2: Stats divergence ? DA ev lehine ama AH ters gidiyorsa
         stats_divergence = 0.0
         if home_da_ratio > 0.6 and kinetik.yon == 'genisleme':
             stats_divergence = home_da_ratio - 0.5
         elif home_da_ratio < 0.4 and kinetik.yon == 'daralma':
             stats_divergence = 0.5 - home_da_ratio
 
-        # X3: Line reversal volatility — hız değişimi
+        # X3: Line reversal volatility ? hiz degisimi
         x3 = abs(kinetik.velocity)
 
-        # Logistic regression proxy (sabit katsayılar)
+        # Logistic regression proxy (sabit katsayilar)
         z = 0.5 + (1.2 * x1) + (2.0 * stats_divergence) - (0.8 * x3)
         p_true_rlm = 1 / (1 + math.exp(-z))
 
@@ -993,7 +994,7 @@ ah_hareket = AHHareketTakibi()
 
 
 # ============================================================================
-# AH SPLİT MEKANİZMASI (V51'den korundu)
+# AH SPLIT MEKANIZMASI (V51'den korundu)
 # ============================================================================
 
 @dataclass
@@ -1092,7 +1093,7 @@ class EventLoopMonitor:
                 self.lag_count += 1
                 self.max_lag = max(self.max_lag, lag)
                 if lag > 200:
-                    logger.error(f"KRİTİK LAG: {lag:.0f}ms")
+                    logger.error(f"KRITIK LAG: {lag:.0f}ms")
             if self.total % 3000 == 0:
                 logger.info(f"EventLoop: %{self.lag_count/self.total*100:.1f} lag, "
                             f"max={self.max_lag:.0f}ms")
@@ -1104,13 +1105,13 @@ loop_monitor = EventLoopMonitor()
 
 
 # ============================================================================
-# LİG FİLTRELEME
+# LIG FILTRELEME
 # ============================================================================
 
 class LeagueFilter:
     """[V57-FIX-6] Lig kategorileme sistemi"""
     
-    # HARD_REJECT: Esport ve sahte maçlar
+    # HARD_REJECT: Esport ve sahte maclar
     HARD_REJECT_PATTERNS = [
         r'\be[-\s]?sport[s]?\b',
         r'\besoccer\b', r'\befootball\b', r'\befoot\b',
@@ -1120,37 +1121,37 @@ class LeagueFilter:
         r'\bonline\b',
     ]
     
-    # ANALYSIS_ONLY: Kadın / Genç / Rezerv ligleri
+    # ANALYSIS_ONLY: Kadin / Genc / Rezerv ligleri
     ANALYSIS_ONLY_PATTERNS = [
-        r'\b(w|women|kadın|kadin|female|ladies)\b',
+        r'\b(w|women|kadin|kadin|female|ladies)\b',
         r'\b(reserves?|rezerv)\b',
         r'\b(youth|junior|academy)\b',
         r'\bu\d{2}\b',  # U17, U18, U19, U20, U21, U23
     ]
     
-    # TEAM_ANALYSIS_ONLY: sadece takım adlarında kontrol edilir.
-    # Lig adındaki "III Liga" gibi ifadeleri yanlışlıkla reserve saymamak için
-    # bu liste league_name'e değil, home_team + away_team metnine uygulanır.
+    # TEAM_ANALYSIS_ONLY: sadece takim adlarinda kontrol edilir.
+    # Lig adindaki "III Liga" gibi ifadeleri yanlislikla reserve saymamak icin
+    # bu liste league_name'e degil, home_team + away_team metnine uygulanir.
     TEAM_ANALYSIS_ONLY_PATTERNS = [
         r'\bii\b',
         r'\biii\b',
         r'\biv\b',
-        # B/2 takımları için tek harfli gerçek takım adlarını yanlış yakalamamak adına
-        # en az 3 harfli takım kökü şartı aranır: Barcelona B, Ajax 2 gibi.
-        r'\b[a-z0-9çğıöşü]{3,}\s+b\b',
-        r'\bb\s+[a-z0-9çğıöşü]{3,}\b',
-        r'\b[a-z0-9çğıöşü]{3,}\s+2\b',
-        r'\b2\s+[a-z0-9çğıöşü]{3,}\b',
+        # B/2 takimlari icin tek harfli gercek takim adlarini yanlis yakalamamak adina
+        # en az 3 harfli takim koku sarti aranir: Barcelona B, Ajax 2 gibi.
+        r'\b[a-z0-9cgiosu]{3,}\s+b\b',
+        r'\bb\s+[a-z0-9cgiosu]{3,}\b',
+        r'\b[a-z0-9cgiosu]{3,}\s+2\b',
+        r'\b2\s+[a-z0-9cgiosu]{3,}\b',
         r'\b(reserves?|reserve|rezerv)\b',
     ]
     
-    # KARANTINA: Belirsiz/riskli ligler (şimdilik Telegram kapalı)
+    # KARANTINA: Belirsiz/riskli ligler (simdilik Telegram kapali)
     KARANTINA = KARANTINA_LIGLER
     
-    # WHITELIST: Büyük / güvenilir ligler
-    # WHITELIST: bilinçli dar tutulur.
-    # Not: sadece 'premier league' veya 'super league' gibi genel ifadeler WHITELIST yapılmaz;
-    # Mongolia/Taiwan/alt ligler bu yüzden NEUTRAL kalır.
+    # WHITELIST: Buyuk / guvenilir ligler
+    # WHITELIST: bilincli dar tutulur.
+    # Not: sadece 'premier league' veya 'super league' gibi genel ifadeler WHITELIST yapilmaz;
+    # Mongolia/Taiwan/alt ligler bu yuzden NEUTRAL kalir.
     WHITELIST  = [
         'champions league', 'uefa champions', 'europa league', 'conference league',
         'germany bundesliga', 'german bundesliga', 'bundesliga', '2. bundesliga',
@@ -1161,8 +1162,8 @@ class LeagueFilter:
         'spain la liga', 'la liga',
         'france ligue 1', 'france ligue 2', 'ligue 1', 'ligue 2',
         'portugal primeira liga', 'primeira liga',
-        'turkey super lig', 'turkey süper lig', 'turkiye super lig', 'türkiye süper lig',
-        'turkey 1. lig', 'turkiye 1. lig', 'türkiye 1. lig',
+        'turkey super lig', 'turkey super lig', 'turkiye super lig', 'turkiye super lig',
+        'turkey 1. lig', 'turkiye 1. lig', 'turkiye 1. lig',
         'scotland premiership', 'premiership',
         'denmark superligaen', 'superligaen',
         'sweden allsvenskan', 'allsvenskan',
@@ -1174,7 +1175,7 @@ class LeagueFilter:
         """
         Lig kategorisini belirle.
         
-        Döndürür:
+        Dondurur:
             (allowed: bool, category: LeagueCategory, reason: str)
         """
         full  = f"{league_name} {home_team} {away_team}".lower()
@@ -1186,13 +1187,13 @@ class LeagueFilter:
             if re.search(pat, full):
                 return False, LeagueCategory.HARD_REJECT, f"HARD_REJECT:{pat}"
         
-        # ANALYSIS_ONLY kontrol (kadın/genç/rezerv)
+        # ANALYSIS_ONLY kontrol (kadin/genc/rezerv)
         for pat in LeagueFilter.ANALYSIS_ONLY_PATTERNS:
             if re.search(pat, full):
                 return True, LeagueCategory.ANALYSIS_ONLY, f"ANALYSIS_ONLY:{pat}"
 
-        # Takım adı üzerinden reserve/B/II kontrolü.
-        # Lig adındaki 'III Liga' gibi ifadeler burada dikkate alınmaz.
+        # Takim adi uzerinden reserve/B/II kontrolu.
+        # Lig adindaki 'III Liga' gibi ifadeler burada dikkate alinmaz.
         for pat in LeagueFilter.TEAM_ANALYSIS_ONLY_PATTERNS:
             if re.search(pat, team_text):
                 return True, LeagueCategory.ANALYSIS_ONLY, f"ANALYSIS_ONLY_TEAM:{pat}"
@@ -1226,7 +1227,7 @@ class LeagueFilter:
     def get_da_threshold(league_name: str) -> float:
         ll = league_name.lower()
         if any(k in ll for k in ['bundesliga','eredivisie','u23','u21',
-                                  'u20','u19','süper lig','super lig',
+                                  'u20','u19','super lig','super lig',
                                   'turkey','portugal']): return 1.3
         if any(k in ll for k in ['kuwait','egypt','third division',
                                   'regionalliga','amateur']): return 2.0
@@ -1238,7 +1239,7 @@ class LeagueFilter:
 
 
 # ============================================================================
-# YARDIMCI FONKSİYONLAR
+# YARDIMCI FONKSIYONLAR
 # ============================================================================
 
 def guvenli_int(v, d=0):
@@ -1267,10 +1268,10 @@ def sigmoid(x: float) -> float:
 
 def game_state_weight(takim_gol: int, rakip_gol: int) -> float:
     """
-    [R5] Skor durumuna göre ağırlık.
-    Geride: 0.85 (baskı psikolojik olarak şişirilir, normalize et)
+    [R5] Skor durumuna gore agirlik.
+    Geride: 0.85 (baski psikolojik olarak sisirilir, normalize et)
     Berabere: 1.0
-    Önde: 1.15 (gerçek üstünlük)
+    Onde: 1.15 (gercek ustunluk)
     """
     fark = takim_gol - rakip_gol
     if fark < 0:   return 0.85
@@ -1284,17 +1285,17 @@ def game_state_weight(takim_gol: int, rakip_gol: int) -> float:
 
 def pressure_wave_cluster(da_gecmis: List[int]) -> float:
     """
-    [R4] Son 5dk DA yoğunluk skoru.
-    Art arda gelen ataklar bağımsız ataklara göre üstel olarak daha değerli.
-    da_gecmis: son 5 ölçümdeki DA değerleri listesi
+    [R4] Son 5dk DA yogunluk skoru.
+    Art arda gelen ataklar bagimsiz ataklara gore ustel olarak daha degerli.
+    da_gecmis: son 5 olcumdeki DA degerleri listesi
     """
     if not da_gecmis or len(da_gecmis) < 2:
         return 1.0
-    # Ardışık artış oranı
+    # Ardisik artis orani
     artislar = sum(1 for i in range(1, len(da_gecmis))
                    if da_gecmis[i] > da_gecmis[i-1])
     oran = artislar / (len(da_gecmis) - 1)
-    # 0.5 → 1.0, 1.0 → 1.5 (üstel)
+    # 0.5 -> 1.0, 1.0 -> 1.5 (ustel)
     return round(1.0 + oran * 0.8, 3)
 
 
@@ -1307,39 +1308,39 @@ def proxy_xt_hesapla(sot: int, da: int, ta: int, korner: int,
                      dakika: int,
                      da_gecmis: Optional[List[int]] = None) -> Tuple[float, str]:
     """
-    [R2] Proxy xT — koordinat verisi olmadan xT yaklaşımı.
+    [R2] Proxy xT ? koordinat verisi olmadan xT yaklasimi.
 
-    Rapor formülü (V51 sot_kalitesi_hesapla'nın upgrade'i):
-    xT_proxy = (SOT/max(DA,1)) × (DA/max(TA,1)) × game_state_w × pressure_wave
+    Rapor formulu (V51 sot_kalitesi_hesapla'nin upgrade'i):
+    xT_proxy = (SOT/max(DA,1)) x (DA/max(TA,1)) x game_state_w x pressure_wave
 
-    SOT/DA: şut isabet oranı — kalitesiz uzaktan şutları düşürür
-    DA/TA:  atak penetrasyon kalitesi — gerçek tehdit / tüm ataklar
-    game_state_w: skor dezavantajı normalize eder
-    pressure_wave: ardışık baskı bonusu
+    SOT/DA: sut isabet orani ? kalitesiz uzaktan sutlari dusurur
+    DA/TA:  atak penetrasyon kalitesi ? gercek tehdit / tum ataklar
+    game_state_w: skor dezavantaji normalize eder
+    pressure_wave: ardisik baski bonusu
     """
     if ta == 0 and da == 0 and sot == 0:
         return 0.0, "Veri yok"
 
-    sot_da_oran  = sot / max(da, 1)    # şut isabet oranı
+    sot_da_oran  = sot / max(da, 1)    # sut isabet orani
     da_ta_oran   = da  / max(ta, 1)    # penetrasyon kalitesi
     gsw          = game_state_weight(takim_gol, rakip_gol)
     pw           = pressure_wave_cluster(da_gecmis or [da])
 
     xt_proxy = sot_da_oran * da_ta_oran * gsw * pw
 
-    # Dakika normalizasyonu (erken dakikalar daha değerli)
+    # Dakika normalizasyonu (erken dakikalar daha degerli)
     xt_norm = xt_proxy * (45 / max(dakika, 1))
 
     if xt_norm >= 0.25:
-        return round(xt_norm, 3), f"YÜKSEK xT({xt_norm:.3f}) GSW:{gsw} PW:{pw:.2f}"
+        return round(xt_norm, 3), f"YUKSEK xT({xt_norm:.3f}) GSW:{gsw} PW:{pw:.2f}"
     elif xt_norm >= 0.10:
         return round(xt_norm, 3), f"ORTA xT({xt_norm:.3f})"
     else:
-        return round(xt_norm, 3), f"DÜŞÜK xT({xt_norm:.3f}) — steril baskı riski"
+        return round(xt_norm, 3), f"DUSUK xT({xt_norm:.3f}) ? steril baski riski"
 
 
 # ============================================================================
-# [R3] F_PRESSURE ENDEKSİ (Corner + Attack Deficit Arbitrage)
+# [R3] F_PRESSURE ENDEKSI (Corner + Attack Deficit Arbitrage)
 # ============================================================================
 
 def fpressure_endeks_hesapla(korner: int, sot: int, da: int,
@@ -1349,47 +1350,47 @@ def fpressure_endeks_hesapla(korner: int, sot: int, da: int,
                               onceki_sot: int = 0,
                               onceki_da: int = 0) -> Tuple[float, bool, str]:
     """
-    [R3] Sahte baskı endeksi.
-    F_pressure = (ΔKorner_10dk / (ΔSOT_10dk + 1)) × skor_carpan
+    [R3] Sahte baski endeksi.
+    F_pressure = (?Korner_10dk / (?SOT_10dk + 1)) x skor_carpan
 
-    skor_carpan: gerideyse 1.5 (panik), beraberese 1.0, öndeyse 0.8
-    F > 2.5 → sahte baskı + arbitraj fırsatı
+    skor_carpan: gerideyse 1.5 (panik), beraberese 1.0, ondeyse 0.8
+    F > 2.5 -> sahte baski + arbitraj firsati
 
-    Rapor: korner/gol korelasyonu yalnızca 0.19
+    Rapor: korner/gol korelasyonu yalnizca 0.19
     """
     delta_korner = max(korner - onceki_korner, 0)
     delta_sot    = max(sot    - onceki_sot,    0)
     delta_da     = max(da     - onceki_da,     0)
 
     fark = takim_gol - rakip_gol
-    if fark < 0:   skor_carpan = 1.5   # geride — panik baskısı
+    if fark < 0:   skor_carpan = 1.5   # geride ? panik baskisi
     elif fark == 0: skor_carpan = 1.0
-    else:           skor_carpan = 0.8   # önde — kontrollü
+    else:           skor_carpan = 0.8   # onde ? kontrollu
 
     f = (delta_korner / (delta_sot + 1)) * skor_carpan
 
-    # Ek kontrol: korner/dakika > 0.3 ve SOT düşük → [AH-8] erken baskı
+    # Ek kontrol: korner/dakika > 0.3 ve SOT dusuk -> [AH-8] erken baski
     korner_per_dk = korner / max(dakika, 1)
     if korner_per_dk > 0.3 and sot < 3:
-        f = max(f, 2.8)   # minimum sahte baskı seviyesi
+        f = max(f, 2.8)   # minimum sahte baski seviyesi
 
     sahte = f > 2.5
-    mesaj = (f"F_PRESSURE={f:.2f} → {'SAHTE BASKI ⚠️' if sahte else 'Normal'} "
-             f"(ΔKorner:{delta_korner}, ΔSOT:{delta_sot})")
+    mesaj = (f"F_PRESSURE={f:.2f} -> {'SAHTE BASKI [WARN]' if sahte else 'Normal'} "
+             f"(?Korner:{delta_korner}, ?SOT:{delta_sot})")
     return round(f, 3), sahte, mesaj
 
 
 # ============================================================================
-# [R6] SHANNON ENTROPİSİ
+# [R6] SHANNON ENTROPISI
 # ============================================================================
 
 class MacEntropisi:
     """
-    [R6] 15 dakikalık pencerede Shannon Entropisi.
-    H = -Σ p_i × log2(p_i)
+    [R6] 15 dakikalik pencerede Shannon Entropisi.
+    H = -? p_i x log2(p_i)
 
-    Yüksek entropi: kaotik, git-gelli maç → gol olasılığı var
-    Düşük entropi: tek takım domine / statik oyun → rölanti riski
+    Yuksek entropi: kaotik, git-gelli mac -> gol olasiligi var
+    Dusuk entropi: tek takim domine / statik oyun -> rolanti riski
     """
 
     def __init__(self):
@@ -1401,21 +1402,21 @@ class MacEntropisi:
         if event_id not in self._olaylar:
             self._olaylar[event_id] = []
         self._olaylar[event_id].append((dakika, da, sot, korner))
-        # 60 dakikadan eski kayıtları sil
+        # 60 dakikadan eski kayitlari sil
         self._olaylar[event_id] = [
             o for o in self._olaylar[event_id] if dakika - o[0] <= 60
         ]
 
     def entropi_hesapla(self, event_id: str,
                         dakika: int) -> Tuple[float, str]:
-        """15dk penceredeki DA + SOT dağılımının Shannon entropisi"""
+        """15dk penceredeki DA + SOT dagiliminin Shannon entropisi"""
         olaylar = self._olaylar.get(event_id, [])
         pencere = [o for o in olaylar if dakika - o[0] <= 15]
 
         if not pencere:
-            return 0.5, "Veri yok — nötr entropi"
+            return 0.5, "Veri yok ? notr entropi"
 
-        # Her 5 dakikalık dilim için olay yoğunluğu
+        # Her 5 dakikalik dilim icin olay yogunlugu
         dilimler = {}
         for o in pencere:
             dilim = (o[0] // 5) * 5
@@ -1423,9 +1424,9 @@ class MacEntropisi:
 
         toplam = sum(dilimler.values())
         if toplam == 0:
-            return 0.0, "Olay yok — düşük entropi"
+            return 0.0, "Olay yok ? dusuk entropi"
 
-        # Shannon H = -Σ p_i × log2(p_i)
+        # Shannon H = -? p_i x log2(p_i)
         H = 0.0
         for v in dilimler.values():
             p = v / toplam
@@ -1437,17 +1438,17 @@ class MacEntropisi:
         H_norm  = H / math.log2(n_dilim + 1)
 
         if H_norm >= 0.7:
-            return round(H_norm, 3), f"YÜKSEK ENTROPİ({H_norm:.2f}) — kaotik maç"
+            return round(H_norm, 3), f"YUKSEK ENTROPI({H_norm:.2f}) ? kaotik mac"
         elif H_norm >= 0.4:
-            return round(H_norm, 3), f"ORTA ENTROPİ({H_norm:.2f})"
+            return round(H_norm, 3), f"ORTA ENTROPI({H_norm:.2f})"
         else:
-            return round(H_norm, 3), f"DÜŞÜK ENTROPİ({H_norm:.2f}) — statik/rölanti"
+            return round(H_norm, 3), f"DUSUK ENTROPI({H_norm:.2f}) ? statik/rolanti"
 
     def match_state_score(self, event_id: str, dakika: int,
                           ev_gol: int, dep_gol: int) -> float:
         """
-        [R7] MS_score = H(t) × e^(-λ(t-45)) × chaos(score_diff)
-        λ = 0.03 (bookmaker time decay sabiti)
+        [R7] MS_score = H(t) x e^(-?(t-45)) x chaos(score_diff)
+        ? = 0.03 (bookmaker time decay sabiti)
         """
         H, _ = self.entropi_hesapla(event_id, dakika)
 
@@ -1455,7 +1456,7 @@ class MacEntropisi:
         lam      = 0.03
         td       = math.exp(-lam * max(dakika - 45, 0))
 
-        # Kaos fonksiyonu: beraberikente yüksek, fark açılınca düşer
+        # Kaos fonksiyonu: beraberikente yuksek, fark acilinca duser
         fark     = abs(ev_gol - dep_gol)
         chaos    = 1.0 / (1 + fark * 0.5)
 
@@ -1467,17 +1468,17 @@ mac_entropisi = MacEntropisi()
 
 
 # ============================================================================
-# [R8] TVPS — TRUE VALUE PROBABILITY SCORE
+# [R8] TVPS ? TRUE VALUE PROBABILITY SCORE
 # ============================================================================
 
 class TVPSKatmani:
     """
     [R8] True Value Probability Score.
-    Tüm modüllerin çıktılarını sigmoid ile 0-1'e sıkıştırır.
-    Piyasa zımni olasılığıyla karşılaştırır.
-    TVPS > 0.05 → +EV onayı
+    Tum modullerin ciktilarini sigmoid ile 0-1'e sikistirir.
+    Piyasa zimni olasiligiyla karsilastirir.
+    TVPS > 0.05 -> +EV onayi
 
-    [R9] Kelly Kriteri stake hesabı (Quarter Kelly)
+    [R9] Kelly Kriteri stake hesabi (Quarter Kelly)
     """
 
     TVPS_ESIGI = 0.05   # %5 edge minimum
@@ -1497,15 +1498,15 @@ class TVPSKatmani:
         market_odds:     float
     ) -> Tuple[float, float, bool, str]:
         """
-        Döner: (tvps_score, kelly_stake, ev_pozitif, aciklama)
+        Doner: (tvps_score, kelly_stake, ev_pozitif, aciklama)
         """
         if market_odds <= 1.0:
-            return 0.0, 0.0, False, "Geçersiz oran"
+            return 0.0, 0.0, False, "Gecersiz oran"
 
-        # Zımni olasılık (vig arındırılmış yaklaşım)
+        # Zimni olasilik (vig arindirilmis yaklasim)
         implied_prob = 1 / market_odds
 
-        # Feature vektörü × ağırlıklar
+        # Feature vektoru x agirliklar
         ham_skor = (
             TVPS_AGIRLIKLAR['da_ivmesi']      * min(da_ivmesi, 3.0)    +
             TVPS_AGIRLIKLAR['proxy_xt']       * min(proxy_xt * 10, 3.0) +
@@ -1519,31 +1520,31 @@ class TVPSKatmani:
             TVPS_AGIRLIKLAR['lig_carpan_bonus'] * (lig_carpan - 1.0)
         )
 
-        # Gerçek olasılık (sigmoid ile 0-1 arasına)
+        # Gercek olasilik (sigmoid ile 0-1 arasina)
         true_prob = sigmoid(ham_skor)
 
-        # TVPS = true_prob / implied_prob - 1 (göreceli avantaj)
+        # TVPS = true_prob / implied_prob - 1 (goreceli avantaj)
         tvps = (true_prob / max(implied_prob, 0.001)) - 1.0
 
         ev_pozitif = tvps > TVPSKatmani.TVPS_ESIGI
 
         # [R9] Quarter Kelly stake
-        # K = (TVPS) / (odds - 1) × 0.25
+        # K = (TVPS) / (odds - 1) x 0.25
         kelly_tam = tvps / max(market_odds - 1, 0.01)
         kelly_q   = max(0.0, min(kelly_tam * 0.25, 0.05))  # maks %5 kasa
 
         aciklama = (
             f"TVPS:{tvps:+.3f} | TrueP:{true_prob:.2%} | "
             f"ImpliedP:{implied_prob:.2%} | "
-            f"Kelly¼:{kelly_q:.2%} kasa | "
-            f"{'✅ +EV' if ev_pozitif else '❌ -EV'}"
+            f"Kelly?:{kelly_q:.2%} kasa | "
+            f"{'[OK] +EV' if ev_pozitif else '[ERR] -EV'}"
         )
 
         return round(tvps, 4), round(kelly_q, 4), ev_pozitif, aciklama
 
 
 # ============================================================================
-# TAKIM İSTATİSTİKLERİ
+# TAKIM ISTATISTIKLERI
 # ============================================================================
 
 @dataclass
@@ -1567,13 +1568,13 @@ class TeamStats:
         return round(ham * (45 / max(dakika, 1)), 2)
 
     def detect_fake_pressure(self) -> bool:
-        # ── 8. KESİN İPTAL KURALLARI (Sahte Baskı — Kısır Atak) ────────────
-        # DA>=45 ve SOT=0 → devasa atak hacmi ama hiç isabetli şut yok
-        # Bu tamamen kısır / verimsiz baskıdır, sinyal üretmez
+        # -- 8. KESIN IPTAL KURALLARI (Sahte Baski ? Kisir Atak) ------------
+        # DA>=45 ve SOT=0 -> devasa atak hacmi ama hic isabetli sut yok
+        # Bu tamamen kisir / verimsiz baskidir, sinyal uretmez
         if self.da >= 45 and self.sot == 0: return True
-        # DA>=60 ve SOT<=3 → 60 atakta sadece 3 isabetli şut, oran çok düşük
+        # DA>=60 ve SOT<=3 -> 60 atakta sadece 3 isabetli sut, oran cok dusuk
         if self.da >= 60 and self.sot <= 3: return True
-        # ── Mevcut kurallar (korundu) ────────────────────────────────────────
+        # -- Mevcut kurallar (korundu) ----------------------------------------
         if self.da > 8 and self.sot == 0: return True
         if self.da > 0 and self.sot > 0 and self.da / self.sot > 8: return True
         if self.korner >= 8 and self.sot < 5: return True
@@ -1592,12 +1593,12 @@ class MatchDataProtection:
         if not ok_h: errs.extend([f"EV:{e}" for e in e_h])
         ok_a, e_a = away.validate_hierarchy()
         if not ok_a: errs.extend([f"DEP:{e}" for e in e_a])
-        if home.gol + away.gol >= 5: errs.append("KOPMUŞ MAÇ(≥5)")
+        if home.gol + away.gol >= 5: errs.append("KOPMUS MAC(>=5)")
         return len(errs) == 0, errs
 
 
 # ============================================================================
-# SKOR DURUMU FİLTRESİ
+# SKOR DURUMU FILTRESI
 # ============================================================================
 
 def skor_durumu_kontrol(ev_gol: int,
@@ -1606,7 +1607,7 @@ def skor_durumu_kontrol(ev_gol: int,
     fark   = abs(ev_gol - dep_gol)
     if toplam >= 5: return False, "KAOS",    0.0
     if fark   >= 3: return False, "ROLANTI", 0.0
-    # [V57-B] 0-0 artık bloklanmıyor — Ev/Dep Gol Atacak için kritik durum
+    # [V57-B] 0-0 artik bloklanmiyor ? Ev/Dep Gol Atacak icin kritik durum
     if toplam == 0: return True,  "SIFIR",   0.0
     if toplam == 1: return True,  "DUSUK",  -3.0
     if toplam == 2: return True,  "NORMAL", -1.0
@@ -1615,15 +1616,15 @@ def skor_durumu_kontrol(ev_gol: int,
 
 
 # ============================================================================
-# SİNYAL TİPLERİ
+# SINYAL TIPLERI
 # ============================================================================
 
 class SignalType(Enum):
-    IY_GOL  = "İY GOL"
+    IY_GOL  = "IY GOL"
     EV_GOL  = "EV GOL"
     DEP_GOL = "DEP GOL"
-    IY2_GOL = "İY2 GOL"
-    IY2_GEC = "İY2 GEÇ"
+    IY2_GOL = "IY2 GOL"
+    IY2_GEC = "IY2 GEC"
 
 
 @dataclass
@@ -1636,7 +1637,7 @@ class SignalResult:
 
 
 # ============================================================================
-# İLK YARI GOL MODÜLÜ
+# ILK YARI GOL MODULU
 # ============================================================================
 
 class IYGolModule:
@@ -1647,9 +1648,9 @@ class IYGolModule:
               event_id: str = "") -> SignalResult:
 
         if not (15 <= minute <= 40):
-            return SignalResult(False, None, 0.0, "Dakika dışı", {})
+            return SignalResult(False, None, 0.0, "Dakika disi", {})
         if home_score + away_score > 1:
-            return SignalResult(False, None, 0.0, "İY skor yüksek", {})
+            return SignalResult(False, None, 0.0, "IY skor yuksek", {})
 
         total_da   = home.da + away.da
         da_esik    = LeagueFilter.get_da_threshold(league_name)
@@ -1657,13 +1658,13 @@ class IYGolModule:
 
         if da_per_min < da_esik:
             return SignalResult(False, None, 0.0,
-                f"DA düşük:{da_per_min:.2f}<{da_esik}", {})
+                f"DA dusuk:{da_per_min:.2f}<{da_esik}", {})
 
-        # [AH-8] Erken aşırı korner filtresi
+        # [AH-8] Erken asiri korner filtresi
         toplam_korner = home.korner + away.korner
         if (toplam_korner / max(minute, 1)) > 0.3 and home.sot + away.sot < 3:
             return SignalResult(False, None, 0.0,
-                "Sahte baskı: Yüksek köşe/dk, düşük SOT", {})
+                "Sahte baski: Yuksek kose/dk, dusuk SOT", {})
 
         # [R2] Proxy xT
         xt, xt_msg = proxy_xt_hesapla(
@@ -1671,10 +1672,10 @@ class IYGolModule:
             home_score, away_score, minute)
 
         score  = 5.0 + min(da_per_min * 2, 5.0) + xt * 5
-        reason = f"İY Gol — DA:{da_per_min:.2f} | {xt_msg}"
+        reason = f"IY Gol ? DA:{da_per_min:.2f} | {xt_msg}"
         if 24 <= minute <= 36:
             score  *= 1.8
-            reason += " | ALTIN PENCERE(×1.8)"
+            reason += " | ALTIN PENCERE(x1.8)"
 
         # [R7] Entropi bonusu
         if event_id:
@@ -1690,7 +1691,7 @@ class IYGolModule:
 
 
 # ============================================================================
-# EV/DEPLASMAN GOL MODÜLÜ
+# EV/DEPLASMAN GOL MODULU
 # ============================================================================
 
 class EvDepGolModule:
@@ -1703,7 +1704,7 @@ class EvDepGolModule:
               market_odds: float = 0.0) -> SignalResult:
 
         if not (20 <= minute <= 80):
-            return SignalResult(False, None, 0.0, "Dakika dışı", {})
+            return SignalResult(False, None, 0.0, "Dakika disi", {})
 
         total_da = home.da + away.da
         if total_da == 0:
@@ -1712,17 +1713,17 @@ class EvDepGolModule:
         home_da_ratio = home.da / total_da
         away_da_ratio = away.da / total_da
 
-        # Baskın takım tespiti
+        # Baskin takim tespiti
         if home_da_ratio > 0.6:
             dom, dom_ratio, sig_type = "HOME", home_da_ratio, SignalType.EV_GOL
             if ah_home >= 0:
-                return SignalResult(False, None, 0.0, "Ev favori değil(AH)", {})
+                return SignalResult(False, None, 0.0, "Ev favori degil(AH)", {})
             dom_stats, dom_ah = home, ah_home
             t_gol, r_gol = ev_gol, dep_gol
         elif away_da_ratio > 0.6:
             dom, dom_ratio, sig_type = "AWAY", away_da_ratio, SignalType.DEP_GOL
             if ah_away <= 0:
-                return SignalResult(False, None, 0.0, "Dep favori değil(AH)", {})
+                return SignalResult(False, None, 0.0, "Dep favori degil(AH)", {})
             dom_stats, dom_ah = away, ah_away
             t_gol, r_gol = dep_gol, ev_gol
         else:
@@ -1740,10 +1741,10 @@ class EvDepGolModule:
                 t_gol = ev_gol if dom == "HOME" else dep_gol
                 r_gol = dep_gol if dom == "HOME" else ev_gol
             else:
-                return SignalResult(False, None, 0.0, "Baskın yok", {})
+                return SignalResult(False, None, 0.0, "Baskin yok", {})
 
         if dom_stats.detect_fake_pressure():
-            return SignalResult(False, None, 0.0, "Sahte baskı", {})
+            return SignalResult(False, None, 0.0, "Sahte baski", {})
 
         # [R3] F_pressure endeksi
         f_val, sahte_f, f_msg = fpressure_endeks_hesapla(
@@ -1753,7 +1754,7 @@ class EvDepGolModule:
             return SignalResult(False, None, 0.0, f"F_pressure: {f_msg}", {})
 
         score  = 6.0 + (dom_ratio - 0.5) * 10
-        reason = f"{dom} baskın"
+        reason = f"{dom} baskin"
 
         # [AH-1] Split analizi
         ah_split  = ah_split_hesapla(dom_ah)
@@ -1771,12 +1772,12 @@ class EvDepGolModule:
                 reason += f" | AH_DARALMA(v:{kinetik.velocity:+.3f})"
             elif kinetik.yon == 'genisleme':
                 score  -= 1.5
-                reason += f" | AH_GENİŞLİYOR(v:{kinetik.velocity:+.3f})"
+                reason += f" | AH_GENISLIYOR(v:{kinetik.velocity:+.3f})"
 
             # AH ivme bonusu
             if kinetik.acceleration > 0.05:
                 score  += 1.0
-                reason += f" | AH_İVME(a:{kinetik.acceleration:+.3f})"
+                reason += f" | AH_IVME(a:{kinetik.acceleration:+.3f})"
 
         # [R3] RLM skoru
         if event_id:
@@ -1787,7 +1788,7 @@ class EvDepGolModule:
                 reason += f" | TRUE_RLM({rlm_p:.0%})"
             elif rlm_tip == "FAKE_RLM":
                 score  -= 2.0
-                reason += f" | FAKE_RLM({rlm_p:.0%}) ⚠️"
+                reason += f" | FAKE_RLM({rlm_p:.0%}) [WARN]"
 
         # [R2] Proxy xT
         xt, xt_msg = proxy_xt_hesapla(
@@ -1802,7 +1803,7 @@ class EvDepGolModule:
                       - dom_stats.korner)
             if c_fark >= 3 and abs(dom_ah) <= 0.50:
                 score  += 3.0
-                reason += f" | SIGNAL_BETA(Δkorner:{c_fark})"
+                reason += f" | SIGNAL_BETA(?korner:{c_fark})"
 
         # [R7] Match state entropy
         if event_id:
@@ -1819,7 +1820,7 @@ class EvDepGolModule:
                 score  += 1.5
                 reason += f" | IMPL_DRIFT:+{drift:.3f}"
 
-        # [R8] TVPS değerlendirmesi (market_odds varsa)
+        # [R8] TVPS degerlendirmesi (market_odds varsa)
         tvps_str = ""
         if market_odds > 1.0:
             tvps, kelly, ev_ok, tvps_msg = TVPSKatmani.hesapla(
@@ -1836,7 +1837,7 @@ class EvDepGolModule:
                 market_odds=market_odds
             )
             if not ev_ok:
-                score  *= 0.7   # -EV ise puanı düşür
+                score  *= 0.7   # -EV ise puani dusur
                 reason += " | -EV(TVPS)"
             else:
                 reason += f" | +EV(TVPS:{tvps:+.3f} K:{kelly:.2%})"
@@ -1852,7 +1853,7 @@ class EvDepGolModule:
 
 
 # ============================================================================
-# İKİNCİ YARI GOL MODÜLÜ
+# IKINCI YARI GOL MODULU
 # ============================================================================
 
 class IY2Module:
@@ -1867,40 +1868,40 @@ class IY2Module:
         elif 76 <= minute <= 90:
             window, sig_t, base = "GEC",   SignalType.IY2_GEC, 4.0
         else:
-            return SignalResult(False, None, 0.0, "Dakika dışı", {})
+            return SignalResult(False, None, 0.0, "Dakika disi", {})
 
         diff = abs(home_score - away_score)
         if diff >= 3:
-            return SignalResult(False, None, 0.0, "Rölanti ≥3", {})
+            return SignalResult(False, None, 0.0, "Rolanti >=3", {})
         if diff >= 2 and minute >= 75:
-            return SignalResult(False, None, 0.0, "Oyun yönetimi", {})
+            return SignalResult(False, None, 0.0, "Oyun yonetimi", {})
         if home.sot + away.sot > 15:
-            return SignalResult(False, None, 0.0, "SOT doygunluğu", {})
+            return SignalResult(False, None, 0.0, "SOT doygunlugu", {})
 
         total_da  = home.da + away.da
         da_per_mn = total_da / minute if minute > 0 else 0
 
         if minute >= 60 and da_per_mn < 0.8:
             return SignalResult(False, None, 0.0,
-                f"Rölanti:momentum({da_per_mn:.2f})", {})
+                f"Rolanti:momentum({da_per_mn:.2f})", {})
         if da_per_mn < 1.0:
-            return SignalResult(False, None, 0.0, "DA düşük", {})
+            return SignalResult(False, None, 0.0, "DA dusuk", {})
 
-        # [R3] F_pressure kontrolü
+        # [R3] F_pressure kontrolu
         f_val, sahte_f, _ = fpressure_endeks_hesapla(
             home.korner + away.korner,
             home.sot + away.sot,
             total_da, minute, home_score, away_score)
         if sahte_f:
             return SignalResult(False, None, 0.0,
-                f"F_pressure sahte baskı", {})
+                f"F_pressure sahte baski", {})
 
         score  = base + min(da_per_mn, 3.0)
-        reason = f"İY2 {window}"
+        reason = f"IY2 {window}"
 
         if 48 <= minute <= 58:
             score  *= 2.0
-            reason += " | KIRILMA(×2.0)"
+            reason += " | KIRILMA(x2.0)"
 
         # [R7] Entropi + time decay
         if event_id:
@@ -1911,7 +1912,7 @@ class IY2Module:
                 reason += f" | MS:{ms:.2f}"
             elif ms < 0.15:
                 score  *= 0.8
-                reason += f" | DÜŞÜK_ENTROPI(×0.8)"
+                reason += f" | DUSUK_ENTROPI(x0.8)"
 
         return SignalResult(True, sig_t, round(score, 2),
                             reason, {'da_per_min': round(da_per_mn, 2),
@@ -1919,7 +1920,7 @@ class IY2Module:
 
 
 # ============================================================================
-# SİNYAL KONSENSÜS MOTORU
+# SINYAL KONSENSUS MOTORU
 # ============================================================================
 
 class SinyalKonsensus:
@@ -1930,12 +1931,12 @@ class SinyalKonsensus:
         en_iyi = max(gecerli, key=lambda s: s.score)
         if len(gecerli) > 1:
             en_iyi.score  = round(en_iyi.score * 1.15, 2)
-            en_iyi.reason += f" | KONSENSÜS(×1.15,{len(gecerli)}mod)"
+            en_iyi.reason += f" | KONSENSUS(x1.15,{len(gecerli)}mod)"
         return en_iyi
 
 
 # ============================================================================
-# VERİ KORUMA KATMANI
+# VERI KORUMA KATMANI
 # ============================================================================
 
 class VeriKorumaKatmani:
@@ -1974,7 +1975,7 @@ class VeriKorumaKatmani:
                 'dep_ta':     guvenli_int(dep_v.get(ters.get('TA',    'S3'), 0)),
                 'dep_da':     guvenli_int(dep_v.get(ters.get('DA',    'S4'), 0)),
                 'dep_gol':    guvenli_int(dep_v.get(ters.get('Gol',   'SC'), 0)),
-                # [K2] Kırmızı kart verileri — S7 kodu
+                # [K2] Kirmizi kart verileri ? S7 kodu
                 'ev_kirmizi':  guvenli_int(ev_v.get('S7', 0)),
                 'dep_kirmizi': guvenli_int(dep_v.get('S7', 0)),
             }
@@ -2008,7 +2009,7 @@ def veri_cikart(ev_v, dep_v) -> dict:
 
 
 # ============================================================================
-# NESİNE KONTROLÜ
+# NESINE KONTROLU
 # ============================================================================
 
 def nesine_lig_kontrolu(league_name, ev_adi, dep_adi) -> bool:
@@ -2016,7 +2017,7 @@ def nesine_lig_kontrolu(league_name, ev_adi, dep_adi) -> bool:
     for pat in LeagueFilter.HARD_REJECT_PATTERNS:
         if re.search(pat, full): return False
     nesine = [
-        'super lig','süper lig','premier league','championship',
+        'super lig','super lig','premier league','championship',
         'la liga','bundesliga','2. bundesliga','serie a','serie b',
         'ligue 1','ligue 2','eredivisie','primeira liga',
         'champions league','europa league','conference league',
@@ -2025,7 +2026,7 @@ def nesine_lig_kontrolu(league_name, ev_adi, dep_adi) -> bool:
 
 
 # ============================================================================
-# ADAPTİF DÖNGÜ & PUAN BARAJI
+# ADAPTIF DONGU & PUAN BARAJI
 # ============================================================================
 
 def dongu_suresi_hesapla(maclar: list) -> int:
@@ -2044,7 +2045,7 @@ def puan_baraji_hesapla(dakika: int, league_name: str) -> float:
 
 
 # ============================================================================
-# AI ANALİZCİLER
+# AI ANALIZCILER
 # ============================================================================
 
 class GrokAIAnalyzer:
@@ -2055,12 +2056,12 @@ class GrokAIAnalyzer:
         try:
             prompt = (
                 f"Futbol analistiyim. MAX 350 karakter:\n"
-                f"MAÇ: {mac_v['ev_adi']} {mac_v['skor']} "
+                f"MAC: {mac_v['ev_adi']} {mac_v['skor']} "
                 f"{mac_v['dep_adi']} ({mac_v['dakika']}')\n"
                 f"TA:{mac_v['ev_ta']}/{mac_v['dep_ta']} "
                 f"DA:{mac_v['ev_da']}/{mac_v['dep_da']} "
                 f"SOT:{mac_v['ev_sot']}/{mac_v['dep_sot']}\n"
-                f"Proxy xT, sahte baskı, TVPS yorum?"
+                f"Proxy xT, sahte baski, TVPS yorum?"
             )
             async with api_rate_limiter:
                 async with session.post(
@@ -2099,12 +2100,12 @@ class GeminiAIAnalyzer:
         if not key: return None
         try:
             prompt = (
-                f"Kısa analiz MAX 300 karakter: "
+                f"Kisa analiz MAX 300 karakter: "
                 f"{mac_v['ev_adi']} {mac_v['skor']} "
                 f"{mac_v['dep_adi']} ({mac_v['dakika']}'). "
                 f"TA:{mac_v['ev_ta']}/{mac_v['dep_ta']} "
                 f"DA:{mac_v['ev_da']}/{mac_v['dep_da']}. "
-                f"xT, sahte baskı, +EV?"
+                f"xT, sahte baski, +EV?"
             )
             url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
                    f"gemini-2.0-flash:generateContent?key={key}")
@@ -2138,7 +2139,7 @@ async def ai_analiz_yap(mac_v, session):
 
 
 # ============================================================================
-# ASIAN HANDICAP ÇEK
+# ASIAN HANDICAP CEK
 # ============================================================================
 
 async def asian_handicap_cek(event_id: str,
@@ -2196,7 +2197,7 @@ async def asian_handicap_cek(event_id: str,
 # ============================================================================
 
 def self_test_classify_live_signal():
-    """classify_live_signal() fonksiyonunun önemli kural testleri"""
+    """classify_live_signal() fonksiyonunun onemli kural testleri"""
     tests = [
         {
             "name": "29dk 1-0 Gol Olacak <50 PASS",
@@ -2234,18 +2235,18 @@ def self_test_classify_live_signal():
             "expected_in": ("B", "LOW_VALUE", "PASS"),
         },
         {
-            "name": "5dk Ev Gol güçlü AH ama çok erken PASS",
+            "name": "5dk Ev Gol guclu AH ama cok erken PASS",
             "args": ("Ev Gol Atacak (S)", 5, 0, 1, 1, 1, -1.25),
             "expected": "PASS",
         },
         {
-            "name": "29dk Ev Gol AH=0.25 zayıf PASS",
+            "name": "29dk Ev Gol AH=0.25 zayif PASS",
             "args": ("Ev Gol Atacak (S)", 29, 0, 0, 1, 0, 0.25),
             "expected": "PASS",
         },
     ]
 
-    logger.info("[SELFTEST] classify_live_signal() testleri başladı")
+    logger.info("[SELFTEST] classify_live_signal() testleri basladi")
     passed = 0
     failed = 0
     
@@ -2260,14 +2261,14 @@ def self_test_classify_live_signal():
             ok = sonuc["sinyal"] in expected_in
         
         if ok:
-            logger.info(f"  ✅ {t['name']} → {sonuc['sinyal']}")
+            logger.info(f"  [OK] {t['name']} -> {sonuc['sinyal']}")
             passed += 1
         else:
-            logger.warning(f"  ❌ {t['name']} → {sonuc['sinyal']} "
+            logger.warning(f"  [ERR] {t['name']} -> {sonuc['sinyal']} "
                           f"(beklenen: {expected or expected_in})")
             failed += 1
     
-    logger.info(f"[SELFTEST] Sonuç: {passed} geçti, {failed} başarısız")
+    logger.info(f"[SELFTEST] Sonuc: {passed} gecti, {failed} basarisiz")
     return failed == 0
 
 
@@ -2286,7 +2287,7 @@ def self_test_league_categories():
          LeagueCategory.KARANTINA),
     ]
 
-    logger.info("[SELFTEST] LeagueFilter lig kategorileme testleri başladı")
+    logger.info("[SELFTEST] LeagueFilter lig kategorileme testleri basladi")
     passed = 0
     failed = 0
     
@@ -2294,19 +2295,19 @@ def self_test_league_categories():
         allowed, category, reason = LeagueFilter.check_league(league, home, away)
         
         if category == expected_cat:
-            logger.info(f"  ✅ {league} → {category.value}")
+            logger.info(f"  [OK] {league} -> {category.value}")
             passed += 1
         else:
-            logger.warning(f"  ❌ {league} → {category.value} "
+            logger.warning(f"  [ERR] {league} -> {category.value} "
                           f"(beklenen: {expected_cat.value})")
             failed += 1
     
-    logger.info(f"[SELFTEST] Sonuç: {passed} geçti, {failed} başarısız")
+    logger.info(f"[SELFTEST] Sonuc: {passed} gecti, {failed} basarisiz")
     return failed == 0
 
 
 # ============================================================================
-# ANA ANALİZ MOTORU
+# ANA ANALIZ MOTORU
 # ============================================================================
 
 async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
@@ -2316,14 +2317,14 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
     try:
         v = veri_cikart(ev_v, dep_v)
 
-        # [K2] Kırmızı kart kalkanı — kırmızı kart varsa sinyal üretme
+        # [K2] Kirmizi kart kalkani ? kirmizi kart varsa sinyal uretme
         ev_kirmizi  = int(v.get('ev_kirmizi', 0) or 0)
         dep_kirmizi = int(v.get('dep_kirmizi', 0) or 0)
         if ev_kirmizi > 0 or dep_kirmizi > 0:
-            logger.debug(f'Kırmızı kart: ev={ev_kirmizi} dep={dep_kirmizi} — sinyal üretilmedi')
+            logger.debug(f'Kirmizi kart: ev={ev_kirmizi} dep={dep_kirmizi} ? sinyal uretilmedi')
             return None
 
-        # [K1] Skor körlüğünü gider — skor string'ini split ile doğrudan oku
+        # [K1] Skor korlugunu gider ? skor string'ini split ile dogrudan oku
         try:
             _parts = str(skor).split('-')
             ev_gol_skor  = int(_parts[0].strip())
@@ -2350,7 +2351,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
         ok, errs = MatchDataProtection.validate_match_data(home_stats, away_stats)
         if not ok: return None
 
-        # [V57-FIX-6] LİG KATEGORİSİ KONTROLü
+        # [V57-FIX-6] LIG KATEGORISI KONTROLu
         lig_allowed, lig_category, lig_reason = LeagueFilter.check_league(
             league_name, ev_adi, dep_adi)
         
@@ -2361,9 +2362,9 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
             logger.debug(f"[LEAGUE] Hard reject: {lig_reason}")
             return None
         
-        # KARANTINA: Şimdilik Telegram kapalı
+        # KARANTINA: Simdilik Telegram kapali
         if lig_category == LeagueCategory.KARANTINA:
-            logger.info(f"[LEAGUE] Karantina lig, Telegram kapalı: {lig_reason}")
+            logger.info(f"[LEAGUE] Karantina lig, Telegram kapali: {lig_reason}")
             return None
         
         if abs(ev_gol - dep_gol) >= 3: return None
@@ -2371,13 +2372,13 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
         skor_ok, skor_d, skor_bonus = skor_durumu_kontrol(ev_gol, dep_gol)
         if not skor_ok: return None
 
-        # [R6] Entropi güncellemesi
+        # [R6] Entropi guncellemesi
         if event_id:
             mac_entropisi.olay_ekle(event_id, dk, da, sot,
                                      home_stats.korner + away_stats.korner)
 
-        # [V57-FIX-5] AH VERİSİ KONTROLÜ - REQUIRE_AH_FOR_SIGNAL
-        # AH çekme her zaman lazım (classify_live_signal için de)
+        # [V57-FIX-5] AH VERISI KONTROLU - REQUIRE_AH_FOR_SIGNAL
+        # AH cekme her zaman lazim (classify_live_signal icin de)
         ah_data = None
         if event_id and (5 <= dk <= 80):
             ah_data = await asian_handicap_cek(event_id, session)
@@ -2402,17 +2403,17 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                         sinyal_dict     = {
                             "sinyal": "AH_MISSING",
                             "puan": 0,
-                            "neden": ["AH verisi yok, sadece analiz için kaydedildi"]
+                            "neden": ["AH verisi yok, sadece analiz icin kaydedildi"]
                         }
                     )
                 except Exception as _ahlog_err:
-                    logger.debug(f"[ANALYSIS_ONLY] AH_MISSING log hatası: {_ahlog_err}")
-            logger.debug("[V57] AH verisi yok, sinyal atlandı")
+                    logger.debug(f"[ANALYSIS_ONLY] AH_MISSING log hatasi: {_ahlog_err}")
+            logger.debug("[V57] AH verisi yok, sinyal atlandi")
             return None
         
-        # [V57] Legacy modülleri DISABLE — ENABLE_LEGACY_MODULES = False iken çalışmazlar
+        # [V57] Legacy modulleri DISABLE ? ENABLE_LEGACY_MODULES = False iken calismazlar
         # IYGolModule / EvDepGolModule / IY2Module / SinyalKonsensus
-        # Ama dosyada kalabilir, "💎 SİNYAL" hiçbir zaman Telegram'a gitmez.
+        # Ama dosyada kalabilir, "[VIP] SINYAL" hicbir zaman Telegram'a gitmez.
         sinyaller: List[SignalResult] = []
         sinyal = None
 
@@ -2438,19 +2439,19 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                 sinyaller.append(s)
             sinyal = SinyalKonsensus.sec(sinyaller)
 
-        # ══════════════════════════════════════════════════════════════════
-        # [V57] CANLI SİNYAL SINIFLANDIRICI — classify_live_signal()
-        # ══════════════════════════════════════════════════════════════════
-        # [V57-FIX-5] Tek mesaj: üç tip için hesapla, en yüksek puanlı A+/A
-        # gönder. B sadece loglanır. LOW_VALUE/PASS/IGNORE sessiz kalır.
-        # ══════════════════════════════════════════════════════════════════
+        # ==================================================================
+        # [V57] CANLI SINYAL SINIFLANDIRICI ? classify_live_signal()
+        # ==================================================================
+        # [V57-FIX-5] Tek mesaj: uc tip icin hesapla, en yuksek puanli A+/A
+        # gonder. B sadece loglanir. LOW_VALUE/PASS/IGNORE sessiz kalir.
+        # ==================================================================
         try:
             _cs_ah    = float(ah_data['ev_handicap']) if ah_data else 0.0
             _cs_ev_c  = int(v.get('ev_korner', 0) or 0)
             _cs_dep_c = int(v.get('dep_korner', 0) or 0)
             _adaylar  = []   # (puan, sinyal_kodu, mesaj, tip)
 
-            # [V57-FIX-6] ANALYSIS_ONLY kategorisinde sinyalleri kaydet fakat Telegram'a gönderme
+            # [V57-FIX-6] ANALYSIS_ONLY kategorisinde sinyalleri kaydet fakat Telegram'a gonderme
             if lig_category == LeagueCategory.ANALYSIS_ONLY:
                 for _tip in ("Gol Olacak (S)", "Ev Gol Atacak (S)", "Dep Gol Atacak (S)"):
                     _cs_mesaj, _cs_sonuc = canli_sinyal_siniflandir(
@@ -2486,13 +2487,13 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                         )
                 
                 logger.info(f"[ANALYSIS_ONLY] {league_name}/{ev_adi} vs {dep_adi} "
-                           f"dk={dk:.0f}: sinyal kaydedildi, Telegram'a gönderilmedi")
+                           f"dk={dk:.0f}: sinyal kaydedildi, Telegram'a gonderilmedi")
                 return None
 
-            # ── [V58-FIX] Gönderim sınıflarını lig kategorisine göre belirle ──
+            # -- [V58-FIX] Gonderim siniflarini lig kategorisine gore belirle --
             # WHITELIST  : A+, A
             # NEUTRAL    : sadece A+ (flag=True, default) veya A+,A (flag=False)
-            # Diğer      : A+, A (güvenli default)
+            # Diger      : A+, A (guvenli default)
             if lig_category == LeagueCategory.WHITELIST:
                 sendable_sinyaller = ("A+", "A")
             elif lig_category == LeagueCategory.NEUTRAL:
@@ -2517,37 +2518,37 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                 _sinyal_kodu = _cs_sonuc["sinyal"]
 
                 logger.debug(
-                    f"[V57] {_tip} → {_sinyal_kodu} "
+                    f"[V57] {_tip} -> {_sinyal_kodu} "
                     f"(puan={_cs_sonuc['puan']})")
 
-                # ── FIX-1: PASS/IGNORE/LOW_VALUE → sessiz atla (log spam yok) ──
+                # -- FIX-1: PASS/IGNORE/LOW_VALUE -> sessiz atla (log spam yok) --
                 if _sinyal_kodu in ("PASS", "IGNORE", "LOW_VALUE"):
                     continue
 
-                # ── FIX-2: B → sadece logla, Telegram'a gönderme ──────────────
+                # -- FIX-2: B -> sadece logla, Telegram'a gonderme --------------
                 if _sinyal_kodu == "B":
                     logger.info(
                         f"[V57] B sinyal (log): {_tip} dk={dk:.0f} "
                         f"puan={_cs_sonuc['puan']} AH={_cs_ah:+.2f}")
                     continue
 
-                # ── FIX-3: Gönderilemeyen sınıf → logla ama devam et ──────────
+                # -- FIX-3: Gonderilemeyen sinif -> logla ama devam et ----------
                 if _sinyal_kodu not in sendable_sinyaller:
                     logger.info(
                         f"[{lig_category.value}] {_sinyal_kodu} sinyal "
-                        f"Telegram'a gönderilmedi "
+                        f"Telegram'a gonderilmedi "
                         f"(kabul: {'/'.join(sendable_sinyaller)})")
                     continue
 
-                # ── NEUTRAL: hedef takım zaten önde ise atla ─────────────────
+                # -- NEUTRAL: hedef takim zaten onde ise atla -----------------
                 if (lig_category == LeagueCategory.NEUTRAL
                         and _tip in ("Ev Gol Atacak (S)", "Dep Gol Atacak (S)")
                         and _target_team_is_leading(_tip, ev_gol, dep_gol)):
                     logger.info(
-                        f"[NEUTRAL] {_tip} hedef takım önde, gönderilmedi")
+                        f"[NEUTRAL] {_tip} hedef takim onde, gonderilmedi")
                     continue
 
-                # ── FIX-4: _cs_mesaj None ise adaya ekleme ───────────────────
+                # -- FIX-4: _cs_mesaj None ise adaya ekleme -------------------
                 if _cs_mesaj:
                     _adaylar.append(
                         (_cs_sonuc["puan"], _sinyal_kodu, _cs_mesaj, _tip))
@@ -2556,7 +2557,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                 _adaylar.sort(reverse=True, key=lambda x: x[0])
                 _en_iyi_puan, _en_iyi_sinyal, _en_iyi_mesaj, _en_iyi_tip = _adaylar[0]
 
-                # ── FIX-5: dup key'e AH değeri ekle (skor+tip+AH benzersiz) ──
+                # -- FIX-5: dup key'e AH degeri ekle (skor+tip+AH benzersiz) --
                 _ah_str  = f"{_cs_ah:+.2f}".replace(".", "_")
                 _dup_key = (f"V57_{_en_iyi_tip[:3]}_"
                             f"{ev_gol}-{dep_gol}_AH{_ah_str}")
@@ -2564,18 +2565,18 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                         event_id, int(dk), _dup_key):
                     sinyal_gecmisi.kaydet(event_id, int(dk), _dup_key)
                     logger.info(
-                        f"[V57] ✅ {_en_iyi_tip} → {_en_iyi_sinyal} | "
+                        f"[V57] [OK] {_en_iyi_tip} -> {_en_iyi_sinyal} | "
                         f"puan={_en_iyi_puan} dk={dk:.0f} "
                         f"skor={skor} AH={_cs_ah:+.2f}")
                     return _en_iyi_mesaj, None, None
 
         except Exception as _cs_err:
-            logger.debug(f"[V57] Sınıflandırıcı hata: {_cs_err}")
+            logger.debug(f"[V57] Siniflandirici hata: {_cs_err}")
             import traceback; logger.debug(traceback.format_exc())
         
-        # ── V57 bitti ───────────────────────────────────────────────────────
-        # ENABLE_LEGACY_MODULES = False → eski "💎 SİNYAL" yolu tamamen kapalı.
-        # Buraya düşen her çağrı sessizce None döner.
+        # -- V57 bitti -------------------------------------------------------
+        # ENABLE_LEGACY_MODULES = False -> eski "[VIP] SINYAL" yolu tamamen kapali.
+        # Buraya dusen her cagri sessizce None doner.
         return None
 
     except Exception as e:
@@ -2585,7 +2586,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
 
 
 # ============================================================================
-# MAÇ İŞLEME
+# MAC ISLEME
 # ============================================================================
 
 async def mac_isle(bot, mac_data: dict,
@@ -2601,8 +2602,6 @@ async def mac_isle(bot, mac_data: dict,
         lig_d       = mac_data.get('league', {})
         league_name = lig_d.get('name','Unknown') if isinstance(lig_d,dict) else 'Unknown'
 
-        # ── HARD_REJECT ERKEN ÇIKIŞ ───────────────────────────────
-        # Sadece e-spor / fake / virtual maçlar burada erken atlanır.
-        # Kadın/genç/rezerv ANALYSIS_ONLY maçlar erken atlanmaz; analiz için kaydedilir.
-        _allowed0, _cat0, _reason0 = LeagueFilter.check_league(league_name, ev_adi, dep_adi)
-        if _c
+        # -- HARD_REJECT ERKEN CIKIS -------------------------------
+        # Sadece e-spor / fake / virtual maclar burada erken atlanir.
+        # 
