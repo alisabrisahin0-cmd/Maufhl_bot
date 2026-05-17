@@ -75,6 +75,18 @@ sinyal_logger.addHandler(_sh)
 sinyal_logger.setLevel(logging.INFO)
 
 # ============================================================================
+# V57 GLOBAL FLAGS (Açılı Kapalı Denetim)
+# ============================================================================
+ENABLE_CLASSIFY_ENGINE        = True   # Sadece classify_live_signal() motoru aktif
+ENABLE_LEGACY_MODULES         = False  # eski IY/EvDep/IY2/Konsensus kapalı
+SEND_B_SIGNALS                = False  # B sinyalleri sadece log, Telegram'a gitmez
+SEND_NEUTRAL_LEAGUE_A_ONLY    = True   # Neutral liglerde sadece A+ Telegram'a gider
+REQUIRE_AH_FOR_SIGNAL         = True   # AH verisi yoksa sinyal üretilmez
+BLOCK_LEGACY_DIAMOND_MESSAGES = True   # 💎 SİNYAL formatı Telegram'a gitmez
+ENABLE_ANALYSIS_ONLY_LOGGING  = True   # Kadın/genç/rezerv ligleri analysis loglanır
+ENABLE_WOMEN_MAIN_TELEGRAM    = False  # Kadın ligleri şimdi ana Telegram'a gitmez
+
+# ============================================================================
 # KONFIGÜRASYON
 # ============================================================================
 
@@ -88,6 +100,20 @@ GEMINI_API_KEY_3 = os.getenv("GEMINI_API_KEY_3") or None
 
 print(f"🔑 Grok={'✅' if GROK_API_KEY else '❌'} | "
       f"Gemini={sum(1 for k in [GEMINI_API_KEY_1,GEMINI_API_KEY_2,GEMINI_API_KEY_3] if k)}/3")
+print(f"[V57 FLAGS] ClassifyEngine={ENABLE_CLASSIFY_ENGINE} | "
+      f"Legacy={ENABLE_LEGACY_MODULES} | "
+      f"ReqAH={REQUIRE_AH_FOR_SIGNAL}")
+
+# ============================================================================
+# LİG KATEGORİ NUMARALANDIRMASI
+# ============================================================================
+class LeagueCategory(Enum):
+    """Lig kategorileri — Telegram politikasını belirler"""
+    HARD_REJECT    = "HARD_REJECT"      # Tamamen reddedilir (esport, vb)
+    ANALYSIS_ONLY  = "ANALYSIS_ONLY"    # Kadın/genç/rezerv — veri kaydedilir, Telegram kapalı
+    KARANTINA      = "KARANTINA"        # Şimdilik Telegram kapalı (Brazil, Kenya, vb)
+    NEUTRAL        = "NEUTRAL"         # Liste dışı normal ligler (sadece A+ gönder)
+    WHITELIST      = "WHITELIST"       # Güvenilir büyük ligler (A+/A gönder)
 
 # ============================================================================
 # KALICI SİNYAL GEÇMİŞİ
@@ -114,7 +140,7 @@ class SinyalGecmisi:
 
     @staticmethod
     def _dk_grubu(dakika: int) -> int:
-        return (dakika // 5) * 5
+        return (dakika // 15) * 15
 
     def zaten_gonderildi_mi(self, event_id, dakika, sinyal_tipi) -> bool:
         dk = self._dk_grubu(dakika)
@@ -138,6 +164,65 @@ class SinyalGecmisi:
 # [V57-FIX-1] Global instance — class bittikten hemen sonra tanımla
 sinyal_gecmisi = SinyalGecmisi()
 
+# ============================================================================
+# ANALYSIS_ONLY SINYALLER (Kadın/Genç/Rezerv Ligleri)
+# ============================================================================
+class AnalysisOnlySignals:
+    def __init__(self, db_path="sinyaller.db"):
+        self.db_path = db_path
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS analysis_only_signals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT,
+                    league_name TEXT,
+                    league_category TEXT,
+                    home_team TEXT,
+                    away_team TEXT,
+                    dakika INTEGER,
+                    skor TEXT,
+                    home_goals INTEGER,
+                    away_goals INTEGER,
+                    home_corners INTEGER,
+                    away_corners INTEGER,
+                    total_corners INTEGER,
+                    ah REAL,
+                    tahmin_tipi TEXT,
+                    sinyal TEXT,
+                    puan INTEGER,
+                    neden TEXT,
+                    timestamp REAL
+                )
+            """)
+            conn.commit()
+
+    def kaydet(self, event_id, league_name, category, home_team, away_team,
+               dakika, skor, home_goals, away_goals, home_corners, away_corners,
+               ah, tahmin_tipi, sinyal_dict):
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                neden_str = " | ".join(sinyal_dict.get("neden", []))
+                conn.execute("""
+                    INSERT INTO analysis_only_signals
+                    (event_id, league_name, league_category, home_team, away_team,
+                     dakika, skor, home_goals, away_goals, home_corners, away_corners,
+                     total_corners, ah, tahmin_tipi, sinyal, puan, neden, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (event_id, league_name, category, home_team, away_team,
+                      dakika, skor, home_goals, away_goals, home_corners, away_corners,
+                      home_corners + away_corners, ah, tahmin_tipi,
+                      sinyal_dict.get("sinyal", "PASS"), sinyal_dict.get("puan", 0),
+                      neden_str, time.time()))
+                conn.commit()
+                logger.info(f"[ANALYSIS_ONLY] {league_name}/{home_team} vs {away_team} "
+                           f"{dakika}dk: {sinyal_dict.get('sinyal')} kaydedildi")
+        except Exception as e:
+            logger.error(f"[ANALYSIS_ONLY] Kayıt hatası: {e}")
+
+analysis_only_signals = AnalysisOnlySignals()
 
 # ── Puan tabloları ──────────────────────────────────────────────────────────
 _DAKIKA_PUAN = {
@@ -179,16 +264,24 @@ def _ah_puani(ah_abs: float) -> int:
     return 0
 
 def _skorline_bonusu(tip: str, ev_gol: int, dep_gol: int) -> int:
-    """Skor durumuna göre bonus/ceza"""
+    """Skor durumuna göre bonus/ceza
+    
+    [V57-FIX-3] Tek gol bonusu KESİN KALDIRILDı.
+    - Gol Olacak: dk<60 zaten IGNORE
+    - Gol Olacak: dk>=60 özel A/A+ kurallarıyla değerlendirilir
+    - 3+ gol cezası devam eder
+    """
     toplam = ev_gol + dep_gol
     if tip == "Gol Olacak (S)":
-        # tek gol bonusu kaldırıldı: 60dk altında IGNORE, üstünde nötr
+        # Tek gol bonusu YOK (erken 1-0 / 0-1 maçları tekrar A'ya dönüştürmemek için)
         if toplam >= 3:   return -8    # 2-1, 2-2, 3-0, 3-1 gibi
         return 0
-    else:  # Ev Gol Atacak (S) / Dep Gol Atacak (S)
+    elif tip in ("Ev Gol Atacak (S)", "Dep Gol Atacak (S)"):
+        # 0-0 bonusu: Saf başlangıç => gol potansiyeli yüksek
         if ev_gol == 0 and dep_gol == 0:
             return +15
         return 0
+    return 0
 
 def _sinif_belirle(puan: int) -> str:
     """Ham puanı sınıfa çevir"""
@@ -211,6 +304,68 @@ def ah_favori_yonu(ah: float) -> str:
     if ah > 0.25:
         return "DEP"
     return "DENGE"
+
+
+
+def _ah_puani_yonlu(tip: str, ah: float) -> Tuple[int, str]:
+    """
+    AH puanını market yönüne göre verir.
+    Gol Olacak takım bağımsızdır; Ev/Dep Gol Atacak ise AH yönüyle aynı tarafta olmalıdır.
+    """
+    ah_abs = abs(ah)
+    fav = ah_favori_yonu(ah)
+
+    if tip == "Gol Olacak (S)":
+        p = _ah_puani(ah_abs)
+        return p, f"AH({ah:+.2f}): takım bağımsız {p:+d}"
+
+    if tip == "Ev Gol Atacak (S)":
+        if fav == "EV":
+            p = _ah_puani(ah_abs)
+            return p, f"AH({ah:+.2f}): EV favori, Ev Gol için {p:+d}"
+        if fav == "DENGE":
+            return 0, f"AH({ah:+.2f}): denge, Ev Gol için +0"
+        return -20, f"AH({ah:+.2f}): DEP favori, Ev Gol için -20"
+
+    if tip == "Dep Gol Atacak (S)":
+        if fav == "DEP":
+            p = _ah_puani(ah_abs)
+            return p, f"AH({ah:+.2f}): DEP favori, Dep Gol için {p:+d}"
+        if fav == "DENGE":
+            return 0, f"AH({ah:+.2f}): denge, Dep Gol için +0"
+        return -20, f"AH({ah:+.2f}): EV favori, Dep Gol için -20"
+
+    return 0, f"AH({ah:+.2f}): +0"
+
+
+def _target_team_is_leading(tip: str, ev_gol: int, dep_gol: int) -> bool:
+    if tip == "Ev Gol Atacak (S)":
+        return ev_gol > dep_gol
+    if tip == "Dep Gol Atacak (S)":
+        return dep_gol > ev_gol
+    return False
+
+
+def _leading_team_goal_penalty(tip: str, ev_gol: int, dep_gol: int, dakika: float) -> Tuple[int, str]:
+    """
+    Takım golü marketinde hedef takım zaten öndeyse value düşer.
+    Bu özellikle erken favori golü spam'ini azaltır.
+    """
+    if tip == "Ev Gol Atacak (S)" and ev_gol > dep_gol:
+        if dakika < 30:
+            return -8, "Ev zaten önde: erken devam golü value cezası -8"
+        if dakika < 60:
+            return -12, "Ev zaten önde: oyun kontrolü riski -12"
+        return -18, "Ev zaten önde: geç dakika rölanti riski -18"
+
+    if tip == "Dep Gol Atacak (S)" and dep_gol > ev_gol:
+        if dakika < 30:
+            return -8, "Dep zaten önde: erken devam golü value cezası -8"
+        if dakika < 60:
+            return -12, "Dep zaten önde: oyun kontrolü riski -12"
+        return -18, "Dep zaten önde: geç dakika rölanti riski -18"
+
+    return 0, ""
 
 
 def classify_live_signal(
@@ -266,6 +421,27 @@ def classify_live_signal(
             "market": "—",
         }
 
+    # GOL OLACAK (S): çok erken 2+ gol = piyasa/value şişmiş olabilir.
+    if tip == "Gol Olacak (S)" and dakika < 30 and toplam_gol >= 2:
+        return {
+            "sinyal": "IGNORE",
+            "puan":   0,
+            "neden":  [f"{dakika:.0f}dk + {toplam_gol} gol: erken skor şişmiş, value düşük"],
+            "market": "—",
+        }
+
+    # GOL OLACAK (S): ilk yarıda fark 2+ ve toplam 2+ gol = erken kopma riski.
+    if (tip == "Gol Olacak (S)"
+            and dakika < 45
+            and toplam_gol >= 2
+            and abs(ev_gol - dep_gol) >= 2):
+        return {
+            "sinyal": "IGNORE",
+            "puan":   0,
+            "neden":  [f"{dakika:.0f}dk + fark≥2 + toplam gol≥2: erken kopma/value düşük"],
+            "market": "—",
+        }
+
     # EV GOL ATACAK (S) — 46-60dk + AH ≈ ±0.5 → PASS
     if (tip == "Ev Gol Atacak (S)"
             and 46 <= dakika <= 60
@@ -299,6 +475,17 @@ def classify_live_signal(
             "market": "—",
         }
 
+    # TAKIM GOLÜ: hedef takım zaten öndeyse erken dakikada value düşük.
+    # Bu, Deren 1-0 gibi favori devam golü spam'ini keser.
+    if tip in ("Ev Gol Atacak (S)", "Dep Gol Atacak (S)") and _target_team_is_leading(tip, ev_gol, dep_gol):
+        if dakika < 30:
+            return {
+                "sinyal": "LOW_VALUE",
+                "puan": 0,
+                "neden": [f"{dakika:.0f}dk + hedef takım zaten önde: takım golü value düşük"],
+                "market": "—",
+            }
+
     # ══════════════════════════════════════════════════════════════════════
     # 2) TİPE GÖRE ÖZEL A+ KURALLARI
     # ══════════════════════════════════════════════════════════════════════
@@ -307,12 +494,13 @@ def classify_live_signal(
     if tip == "Gol Olacak (S)":
         market = "Gol Olacak / MS 0.5 Üst"
 
-        # A+ : toplam gol=1, korner=0-3, AH mutlak ≥1.25, dk≥46
+        # [V57-FIX-2] A+ : toplam gol=1, korner=0-3, AH mutlak ≥1.25, dk≥60
+        # 60. dakika öncesi 1-0 güvenilir değildir
         if (toplam_gol == 1
                 and toplam_korner <= 3
                 and ah_abs >= 1.25
-                and dakika >= 46):
-            neden.append("A+ koşulu: gol=1, korner≤3, AH≥1.25, dk≥46")
+                and dakika >= 60):
+            neden.append("A+ koşulu: gol=1, korner≤3, AH≥1.25, dk≥60")
             return {
                 "sinyal": "A+",
                 "puan":   75,
@@ -320,9 +508,9 @@ def classify_live_signal(
                 "market": market,
             }
 
-        # A : dk≥46 + AH≥1.0 + gol=1
-        if dakika >= 46 and ah_abs >= 1.0 and toplam_gol == 1:
-            neden.append("A koşulu: dk≥46, AH≥1.0, gol=1")
+        # [V57-FIX-2] A : dk≥60 + AH≥1.0 + gol=1
+        if dakika >= 60 and ah_abs >= 1.0 and toplam_gol == 1:
+            neden.append("A koşulu: dk≥60, AH≥1.0, gol=1")
             return {
                 "sinyal": "A",
                 "puan":   50,
@@ -344,18 +532,11 @@ def classify_live_signal(
                 "market": market,
             }
 
-        # Eski kural (fav yönü belirsizse de çalışsın): skor 0-0 + AH≥2.0
-        if ev_gol == 0 and dep_gol == 0 and ah_abs >= 2.0:
-            neden.append("A+ koşulu: skor 0-0, AH≥2.0 → güçlü ev favori")
-            return {
-                "sinyal": "A+",
-                "puan":   70,
-                "neden":  neden,
-                "market": market,
-            }
+        # Eski fav-yönsüz A+ kuralı kaldırıldı.
+        # Ev golünde güçlü AH sadece fav == EV ise değerli sayılır.
 
-        # A : skor 0-0 + korner 0-3
-        if ev_gol == 0 and dep_gol == 0 and toplam_korner <= 3:
+        # A : skor 0-0 + korner 0-3 + AH ters yönde değil
+        if ev_gol == 0 and dep_gol == 0 and toplam_korner <= 3 and fav != "DEP":
             neden.append("A koşulu: skor 0-0, korner≤3 → temiz başlangıç")
             return {
                 "sinyal": "A",
@@ -378,8 +559,8 @@ def classify_live_signal(
                 "market": market,
             }
 
-        # B+ : dakika 0-15
-        if dakika <= 15:
+        # B+ : dakika 0-15 + AH ters yönde değil
+        if dakika <= 15 and fav != "EV":
             neden.append("B+ koşulu: ilk 15dk — erken açık pozisyon")
             return {
                 "sinyal": "B",
@@ -388,8 +569,8 @@ def classify_live_signal(
                 "market": market,
             }
 
-        # B+ : skor 0-0
-        if ev_gol == 0 and dep_gol == 0:
+        # B+ : skor 0-0 + AH ters yönde değil
+        if ev_gol == 0 and dep_gol == 0 and fav != "EV":
             neden.append("B+ koşulu: skor 0-0 → dep gol potansiyeli")
             return {
                 "sinyal": "B",
@@ -414,10 +595,16 @@ def classify_live_signal(
     if kp != 0:
         neden.append(f"Korner({toplam_korner}): {kp:+d}")
 
-    # AH puanı
-    ap = _ah_puani(ah_abs)
+    # AH puanı — takım golü marketlerinde yönlü, Gol Olacak'ta takım bağımsız
+    ap, ah_neden = _ah_puani_yonlu(tip, ah)
     puan += ap
-    neden.append(f"AH({ah:+.2f}): {ap:+d}")
+    neden.append(ah_neden)
+
+    # Hedef takım zaten öndeyse takım golü marketine value cezası
+    lead_penalty, lead_msg = _leading_team_goal_penalty(tip, ev_gol, dep_gol, dakika)
+    if lead_penalty:
+        puan += lead_penalty
+        neden.append(lead_msg)
 
     # Skorline bonusu
     sb = _skorline_bonusu(tip, ev_gol, dep_gol)
@@ -430,6 +617,11 @@ def classify_live_signal(
         neden.append("⚠️ Yüksek korner (7-9): risk bölgesi")
 
     sinyal = _sinif_belirle(puan)
+
+    # Takım golü marketinde hedef takım zaten öndeyse A+ üretme, maksimum A.
+    if sinyal == "A+" and _target_team_is_leading(tip, ev_gol, dep_gol):
+        sinyal = "A"
+        neden.append("A+ sınırı: hedef takım zaten önde, maksimum A")
 
     # Market belirleme (genel puanlama yoluna düşenler için)
     if not market:
@@ -506,14 +698,24 @@ def canli_sinyal_siniflandir(
     """
     Wrapper: classify_live_signal() çağırır ve
     (mesaj_veya_None, sinyal_dict) döndürür.
-    Telegram'a gönderilebilecek sınıflar: A+, A, B
+    
+    [V57-FIX-5] Telegram'a gönderilebilecek sınıflar:
+    - SEND_B_SIGNALS=False (default): sadece A+, A
+    - SEND_B_SIGNALS=True: A+, A, B
     """
     sonuc = classify_live_signal(tip, dakika, ev_gol, dep_gol,
                                   ev_corner, dep_corner, ah)
-    if sonuc["sinyal"] in ("A+", "A", "B"):
+    
+    sendable = ("A+", "A") if not SEND_B_SIGNALS else ("A+", "A", "B")
+    
+    if sonuc["sinyal"] in sendable:
         mesaj = sinyal_mesaj_olustur(
             tip, dakika, ev_adi, dep_adi, skor, league, sonuc)
         return mesaj, sonuc
+    elif sonuc["sinyal"] == "B":
+        logger.info(f"[V57] B sinyali log only: {tip} {dakika}dk {ev_adi} vs {dep_adi}")
+        return None, sonuc
+    
     return None, sonuc
 
 
@@ -759,39 +961,107 @@ loop_monitor = EventLoopMonitor()
 # ============================================================================
 
 class LeagueFilter:
-    ALWAYS_REJECT = [
-        # E-spor — geniş yakalama (BetsAPI çeşitli isimler kullanır)
+    """[V57-FIX-6] Lig kategorileme sistemi"""
+    
+    # HARD_REJECT: Esport ve sahte maçlar
+    HARD_REJECT_PATTERNS = [
         r'\be[-\s]?sport[s]?\b',
         r'\besoccer\b', r'\befootball\b', r'\befoot\b',
         r'\bcyber\b',  r'\bgaming\b',   r'\bfifa\b',
         r'\bpes\b',    r'\bvirtual\b',  r'\bsimulat',
         r'\bclash\b',  r'\barena\b',    r'\bdigital\b',
         r'\bonline\b',
-        # Kadın / rezerv / genç
-        r'\b(w|women|kadın|kadin)\b', r'\b(reserves?|rezerv)\b',
-        r'\b(youth|junior|academy)\b', r'\bu\d{2}\b',
     ]
+    
+    # ANALYSIS_ONLY: Kadın / Genç / Rezerv ligleri
+    ANALYSIS_ONLY_PATTERNS = [
+        r'\b(w|women|kadın|kadin|female|ladies)\b',
+        r'\b(reserves?|rezerv)\b',
+        r'\b(youth|junior|academy)\b',
+        r'\bu\d{2}\b',  # U17, U18, U19, U20, U21, U23
+    ]
+    
+    # TEAM_ANALYSIS_ONLY: sadece takım adlarında kontrol edilir.
+    # Lig adındaki "III Liga" gibi ifadeleri yanlışlıkla reserve saymamak için
+    # bu liste league_name'e değil, home_team + away_team metnine uygulanır.
+    TEAM_ANALYSIS_ONLY_PATTERNS = [
+        r'\bii\b',
+        r'\biii\b',
+        r'\biv\b',
+        # B/2 takımları için tek harfli gerçek takım adlarını yanlış yakalamamak adına
+        # en az 3 harfli takım kökü şartı aranır: Barcelona B, Ajax 2 gibi.
+        r'\b[a-z0-9çğıöşü]{3,}\s+b\b',
+        r'\bb\s+[a-z0-9çğıöşü]{3,}\b',
+        r'\b[a-z0-9çğıöşü]{3,}\s+2\b',
+        r'\b2\s+[a-z0-9çğıöşü]{3,}\b',
+        r'\b(reserves?|reserve|rezerv)\b',
+    ]
+    
+    # KARANTINA: Belirsiz/riskli ligler (şimdilik Telegram kapalı)
     KARANTINA = KARANTINA_LIGLER
+    
+    # WHITELIST: Büyük / güvenilir ligler
+    # WHITELIST: bilinçli dar tutulur.
+    # Not: sadece 'premier league' veya 'super league' gibi genel ifadeler WHITELIST yapılmaz;
+    # Mongolia/Taiwan/alt ligler bu yüzden NEUTRAL kalır.
     WHITELIST  = [
-        'bundesliga', 'eredivisie', 'champions league', 'europa league',
-        'conference league', 'premier league', 'championship',
-        'serie a', 'serie b', 'la liga', 'ligue 1', 'ligue 2',
-        'primeira liga', 'pro league', 'super league', 'süper lig',
-        'super lig', '1. lig', '2. lig', 'premiership',
-        'superligaen', 'allsvenskan', 'eliteserien',
+        'champions league', 'uefa champions', 'europa league', 'conference league',
+        'germany bundesliga', 'german bundesliga', 'bundesliga', '2. bundesliga',
+        'netherlands eredivisie', 'eredivisie',
+        'england premier league', 'english premier league', 'england premier',
+        'england championship', 'efl championship', 'championship',
+        'italy serie a', 'italy serie b', 'serie a', 'serie b',
+        'spain la liga', 'la liga',
+        'france ligue 1', 'france ligue 2', 'ligue 1', 'ligue 2',
+        'portugal primeira liga', 'primeira liga',
+        'turkey super lig', 'turkey süper lig', 'turkiye super lig', 'türkiye süper lig',
+        'turkey 1. lig', 'turkiye 1. lig', 'türkiye 1. lig',
+        'scotland premiership', 'premiership',
+        'denmark superligaen', 'superligaen',
+        'sweden allsvenskan', 'allsvenskan',
+        'norway eliteserien', 'eliteserien',
     ]
 
     @staticmethod
-    def check_league(league_name, home_team, away_team) -> Tuple[bool, str]:
+    def check_league(league_name, home_team, away_team) -> Tuple[bool, LeagueCategory, str]:
+        """
+        Lig kategorisini belirle.
+        
+        Döndürür:
+            (allowed: bool, category: LeagueCategory, reason: str)
+        """
         full  = f"{league_name} {home_team} {away_team}".lower()
         lig_l = league_name.lower()
-        for pat in LeagueFilter.ALWAYS_REJECT:
-            if re.search(pat, full): return False, f"REJECT:{pat}"
+        team_text = f"{home_team} {away_team}".lower()
+        
+        # HARD_REJECT kontrol
+        for pat in LeagueFilter.HARD_REJECT_PATTERNS:
+            if re.search(pat, full):
+                return False, LeagueCategory.HARD_REJECT, f"HARD_REJECT:{pat}"
+        
+        # ANALYSIS_ONLY kontrol (kadın/genç/rezerv)
+        for pat in LeagueFilter.ANALYSIS_ONLY_PATTERNS:
+            if re.search(pat, full):
+                return True, LeagueCategory.ANALYSIS_ONLY, f"ANALYSIS_ONLY:{pat}"
+
+        # Takım adı üzerinden reserve/B/II kontrolü.
+        # Lig adındaki 'III Liga' gibi ifadeler burada dikkate alınmaz.
+        for pat in LeagueFilter.TEAM_ANALYSIS_ONLY_PATTERNS:
+            if re.search(pat, team_text):
+                return True, LeagueCategory.ANALYSIS_ONLY, f"ANALYSIS_ONLY_TEAM:{pat}"
+        
+        # KARANTINA kontrol
         for kw in LeagueFilter.KARANTINA:
-            if kw in lig_l: return False, f"KARANTINA:{kw}"
+            if kw in lig_l:
+                return False, LeagueCategory.KARANTINA, f"KARANTINA:{kw}"
+        
+        # WHITELIST kontrol
         for kw in LeagueFilter.WHITELIST:
-            if kw in lig_l: return True, f"WHITELIST:{kw}"
-        return True, "NEUTRAL"
+            if kw in lig_l:
+                return True, LeagueCategory.WHITELIST, f"WHITELIST:{kw}"
+        
+        # DEFAULT: NEUTRAL
+        return True, LeagueCategory.NEUTRAL, "NEUTRAL"
 
     @staticmethod
     def get_league_multiplier(league_name: str) -> float:
@@ -1189,7 +1459,8 @@ def skor_durumu_kontrol(ev_gol: int,
     fark   = abs(ev_gol - dep_gol)
     if toplam >= 5: return False, "KAOS",    0.0
     if fark   >= 3: return False, "ROLANTI", 0.0
-    if toplam == 0: return False, "SIFIR",   0.0
+    # [V57-B] 0-0 artık bloklanmıyor — Ev/Dep Gol Atacak için kritik durum
+    if toplam == 0: return True,  "SIFIR",   0.0
     if toplam == 1: return True,  "DUSUK",  -3.0
     if toplam == 2: return True,  "NORMAL", -1.0
     if toplam == 3: return True,  "IYI",    +2.0
@@ -1595,7 +1866,7 @@ def veri_cikart(ev_v, dep_v) -> dict:
 
 def nesine_lig_kontrolu(league_name, ev_adi, dep_adi) -> bool:
     full = f"{league_name} {ev_adi} {dep_adi}".lower()
-    for pat in LeagueFilter.ALWAYS_REJECT:
+    for pat in LeagueFilter.HARD_REJECT_PATTERNS:
         if re.search(pat, full): return False
     nesine = [
         'super lig','süper lig','premier league','championship',
@@ -1774,6 +2045,100 @@ async def asian_handicap_cek(event_id: str,
 
 
 # ============================================================================
+# SELF-TEST FONKSIYONLARI
+# ============================================================================
+
+def self_test_classify_live_signal():
+    """classify_live_signal() fonksiyonunun önemli kural testleri"""
+    tests = [
+        {
+            "name": "29dk 1-0 Gol Olacak IGNORE",
+            "args": ("Gol Olacak (S)", 29, 1, 0, 1, 2, -0.75),
+            "expected": "IGNORE",
+        },
+        {
+            "name": "59dk 1-0 Gol Olacak IGNORE",
+            "args": ("Gol Olacak (S)", 59, 1, 0, 1, 2, -1.25),
+            "expected": "IGNORE",
+        },
+        {
+            "name": "60dk 1-0 Gol Olacak A+",
+            "args": ("Gol Olacak (S)", 60, 1, 0, 1, 0, -1.25),
+            "expected_in": ("A+", "A"),
+        },
+        {
+            "name": "60dk 1-0 Gol Olacak AH=0.5 low_value",
+            "args": ("Gol Olacak (S)", 60, 1, 0, 1, 2, 0.5),
+            "expected_in": ("A", "B", "LOW_VALUE"),
+        },
+        {
+            "name": "50dk Ev Gol AH=0.5 PASS",
+            "args": ("Ev Gol Atacak (S)", 50, 1, 0, 1, 4, -0.50),
+            "expected": "PASS",
+        },
+    ]
+
+    logger.info("[SELFTEST] classify_live_signal() testleri başladı")
+    passed = 0
+    failed = 0
+    
+    for t in tests:
+        sonuc = classify_live_signal(*t["args"])
+        expected = t.get("expected")
+        expected_in = t.get("expected_in", ())
+        
+        if expected:
+            ok = sonuc["sinyal"] == expected
+        else:
+            ok = sonuc["sinyal"] in expected_in
+        
+        if ok:
+            logger.info(f"  ✅ {t['name']} → {sonuc['sinyal']}")
+            passed += 1
+        else:
+            logger.warning(f"  ❌ {t['name']} → {sonuc['sinyal']} "
+                          f"(beklenen: {expected or expected_in})")
+            failed += 1
+    
+    logger.info(f"[SELFTEST] Sonuç: {passed} geçti, {failed} başarısız")
+    return failed == 0
+
+
+def self_test_league_categories():
+    """LeagueFilter lig kategorileme testleri"""
+    tests = [
+        ("England Women Super League", "Chelsea Women", "Arsenal Women", 
+         LeagueCategory.ANALYSIS_ONLY),
+        ("Germany Bundesliga", "Bayern", "Dortmund", 
+         LeagueCategory.WHITELIST),
+        ("Taiwan Premier League", "A", "B", 
+         LeagueCategory.NEUTRAL),
+        ("eSoccer Battle", "A", "B", 
+         LeagueCategory.HARD_REJECT),
+        ("Brazil Serie A", "A", "B", 
+         LeagueCategory.KARANTINA),
+    ]
+
+    logger.info("[SELFTEST] LeagueFilter lig kategorileme testleri başladı")
+    passed = 0
+    failed = 0
+    
+    for league, home, away, expected_cat in tests:
+        allowed, category, reason = LeagueFilter.check_league(league, home, away)
+        
+        if category == expected_cat:
+            logger.info(f"  ✅ {league} → {category.value}")
+            passed += 1
+        else:
+            logger.warning(f"  ❌ {league} → {category.value} "
+                          f"(beklenen: {expected_cat.value})")
+            failed += 1
+    
+    logger.info(f"[SELFTEST] Sonuç: {passed} geçti, {failed} başarısız")
+    return failed == 0
+
+
+# ============================================================================
 # ANA ANALİZ MOTORU
 # ============================================================================
 
@@ -1818,10 +2183,22 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
         ok, errs = MatchDataProtection.validate_match_data(home_stats, away_stats)
         if not ok: return None
 
-        # Filtreler
-        lig_ok, _ = LeagueFilter.check_league(league_name, ev_adi, dep_adi)
-        if not lig_ok: return None
-        if LeagueFilter.is_karantina(league_name): return None
+        # [V57-FIX-6] LİG KATEGORİSİ KONTROLü
+        lig_allowed, lig_category, lig_reason = LeagueFilter.check_league(
+            league_name, ev_adi, dep_adi)
+        
+        logger.debug(f"[LEAGUE] {league_name}: {lig_category.value} | {lig_reason}")
+        
+        # HARD_REJECT: Tamamen reddet
+        if lig_category == LeagueCategory.HARD_REJECT:
+            logger.debug(f"[LEAGUE] Hard reject: {lig_reason}")
+            return None
+        
+        # KARANTINA: Şimdilik Telegram kapalı
+        if lig_category == LeagueCategory.KARANTINA:
+            logger.info(f"[LEAGUE] Karantina lig, Telegram kapalı: {lig_reason}")
+            return None
+        
         if abs(ev_gol - dep_gol) >= 3: return None
 
         skor_ok, skor_d, skor_bonus = skor_durumu_kontrol(ev_gol, dep_gol)
@@ -1832,14 +2209,45 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
             mac_entropisi.olay_ekle(event_id, dk, da, sot,
                                      home_stats.korner + away_stats.korner)
 
-        # ── [V57] ENABLE_LEGACY_MODULES = False → eski hat tamamen kapalı ──────
-        # IYGolModule / EvDepGolModule / IY2Module / SinyalKonsensus çağrıları
-        # bu flag False iken hiç çalışmaz, "💎 SİNYAL" mesajı üretilmez.
-        ENABLE_LEGACY_MODULES = False
-
+        # [V57-FIX-5] AH VERİSİ KONTROLÜ - REQUIRE_AH_FOR_SIGNAL
+        # AH çekme her zaman lazım (classify_live_signal için de)
+        ah_data = None
+        if event_id and (5 <= dk <= 80):
+            ah_data = await asian_handicap_cek(event_id, session)
+        
+        if REQUIRE_AH_FOR_SIGNAL and not ah_data:
+            if lig_category == LeagueCategory.ANALYSIS_ONLY and ENABLE_ANALYSIS_ONLY_LOGGING:
+                try:
+                    analysis_only_signals.kaydet(
+                        event_id        = event_id,
+                        league_name     = league_name,
+                        category        = lig_category.value,
+                        home_team       = ev_adi,
+                        away_team       = dep_adi,
+                        dakika          = int(dk),
+                        skor            = skor,
+                        home_goals      = ev_gol,
+                        away_goals      = dep_gol,
+                        home_corners    = home_stats.korner,
+                        away_corners    = away_stats.korner,
+                        ah              = 0.0,
+                        tahmin_tipi     = "AH_MISSING",
+                        sinyal_dict     = {
+                            "sinyal": "AH_MISSING",
+                            "puan": 0,
+                            "neden": ["AH verisi yok, sadece analiz için kaydedildi"]
+                        }
+                    )
+                except Exception as _ahlog_err:
+                    logger.debug(f"[ANALYSIS_ONLY] AH_MISSING log hatası: {_ahlog_err}")
+            logger.debug("[V57] AH verisi yok, sinyal atlandı")
+            return None
+        
+        # [V57] Legacy modülleri DISABLE — ENABLE_LEGACY_MODULES = False iken çalışmazlar
+        # IYGolModule / EvDepGolModule / IY2Module / SinyalKonsensus
+        # Ama dosyada kalabilir, "💎 SİNYAL" hiçbir zaman Telegram'a gitmez.
         sinyaller: List[SignalResult] = []
         sinyal = None
-        ah_data = None
 
         if ENABLE_LEGACY_MODULES:
             if 15 <= dk <= 40:
@@ -1852,11 +2260,6 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                                     ev_gol, dep_gol, league_name, event_id)
                 sinyaller.append(s)
 
-        # AH çekme her zaman lazım (classify_live_signal için de)
-        if event_id and (5 <= dk <= 80):
-            ah_data = await asian_handicap_cek(event_id, session)
-
-        if ENABLE_LEGACY_MODULES:
             if ah_data and 20 <= dk <= 80:
                 market_odds = ah_data.get('ev_oran', 0.0)
                 s = EvDepGolModule.check(
@@ -1880,6 +2283,57 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
             _cs_dep_c = int(v.get('dep_korner', 0) or 0)
             _adaylar  = []   # (puan, sinyal_kodu, mesaj, tip)
 
+            # [V57-FIX-6] ANALYSIS_ONLY kategorisinde sinyalleri kaydet fakat Telegram'a gönderme
+            if lig_category == LeagueCategory.ANALYSIS_ONLY:
+                for _tip in ("Gol Olacak (S)", "Ev Gol Atacak (S)", "Dep Gol Atacak (S)"):
+                    _cs_mesaj, _cs_sonuc = canli_sinyal_siniflandir(
+                        tip        = _tip,
+                        dakika     = dk,
+                        ev_gol     = ev_gol,
+                        dep_gol    = dep_gol,
+                        ev_corner  = _cs_ev_c,
+                        dep_corner = _cs_dep_c,
+                        ah         = _cs_ah,
+                        ev_adi     = ev_adi,
+                        dep_adi    = dep_adi,
+                        skor       = skor,
+                        league     = league_name,
+                    )
+                    
+                    if ENABLE_ANALYSIS_ONLY_LOGGING:
+                        analysis_only_signals.kaydet(
+                            event_id        = event_id,
+                            league_name     = league_name,
+                            category        = lig_category.value,
+                            home_team       = ev_adi,
+                            away_team       = dep_adi,
+                            dakika          = int(dk),
+                            skor            = skor,
+                            home_goals      = ev_gol,
+                            away_goals      = dep_gol,
+                            home_corners    = _cs_ev_c,
+                            away_corners    = _cs_dep_c,
+                            ah              = _cs_ah,
+                            tahmin_tipi     = _tip,
+                            sinyal_dict     = _cs_sonuc
+                        )
+                
+                logger.info(f"[ANALYSIS_ONLY] {league_name}/{ev_adi} vs {dep_adi} "
+                           f"dk={dk:.0f}: sinyal kaydedildi, Telegram'a gönderilmedi")
+                return None
+
+            # [V57-FIX-6] NEUTRAL kategorisinde: sadece A+ ve (flag false ise) A+
+            # WHITELIST kategorisinde: A+/A gönder
+            sendable_sinyaller = None
+            
+            if lig_category == LeagueCategory.WHITELIST:
+                sendable_sinyaller = ("A+", "A")
+            elif lig_category == LeagueCategory.NEUTRAL:
+                if SEND_NEUTRAL_LEAGUE_A_ONLY:
+                    sendable_sinyaller = ("A+",)
+                else:
+                    sendable_sinyaller = ("A+", "A")
+            
             for _tip in ("Gol Olacak (S)", "Ev Gol Atacak (S)", "Dep Gol Atacak (S)"):
                 _cs_mesaj, _cs_sonuc = canli_sinyal_siniflandir(
                     tip        = _tip,
@@ -1898,9 +2352,23 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                     f"[V57] {_tip} → {_cs_sonuc['sinyal']} "
                     f"(puan={_cs_sonuc['puan']})")
 
-                if _cs_sonuc["sinyal"] in ("A+", "A"):
-                    _adaylar.append(
-                        (_cs_sonuc["puan"], _cs_sonuc["sinyal"], _cs_mesaj, _tip))
+                # NEUTRAL liglerde filtre uygula
+                if lig_category == LeagueCategory.NEUTRAL and sendable_sinyaller:
+                    if _cs_sonuc["sinyal"] not in sendable_sinyaller:
+                        logger.info(f"[NEUTRAL] {_cs_sonuc['sinyal']} sinyal "
+                                   f"Telegram'a gönderilmedi (sadece A+ kabul)")
+                        continue
+
+                    # Neutral liglerde takım golü + hedef takım zaten önde = Telegram kapalı
+                    if _tip in ("Ev Gol Atacak (S)", "Dep Gol Atacak (S)") and _target_team_is_leading(_tip, ev_gol, dep_gol):
+                        logger.info(f"[NEUTRAL] {_tip} hedef takım önde, Telegram'a gönderilmedi")
+                        continue
+
+                # Sadece bu lig kategorisi için gönderilebilir sınıflar aday olabilir.
+                if _cs_sonuc["sinyal"] in (sendable_sinyaller or ("A+", "A")):
+                    if _cs_mesaj:
+                        _adaylar.append(
+                            (_cs_sonuc["puan"], _cs_sonuc["sinyal"], _cs_mesaj, _tip))
                 elif _cs_sonuc["sinyal"] == "B":
                     logger.info(
                         f"[V57] B sinyal (logda): {_tip} dk={dk:.0f} "
@@ -1911,8 +2379,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                 _adaylar.sort(reverse=True, key=lambda x: x[0])
                 _en_iyi_puan, _en_iyi_sinyal, _en_iyi_mesaj, _en_iyi_tip = _adaylar[0]
 
-                _dup_key = (f"V57_{_en_iyi_tip[:3]}_{int(dk // 5) * 5}_"
-                            f"{ev_gol}-{dep_gol}")
+                _dup_key = f"V57_{_en_iyi_tip}_{ev_gol}-{dep_gol}"
                 if not sinyal_gecmisi.zaten_gonderildi_mi(
                         event_id, int(dk), _dup_key):
                     sinyal_gecmisi.kaydet(event_id, int(dk), _dup_key)
@@ -1924,6 +2391,7 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
         except Exception as _cs_err:
             logger.debug(f"[V57] Sınıflandırıcı hata: {_cs_err}")
             import traceback; logger.debug(traceback.format_exc())
+        
         # ── V57 bitti ───────────────────────────────────────────────────────
         # ENABLE_LEGACY_MODULES = False → eski "💎 SİNYAL" yolu tamamen kapalı.
         # Buraya düşen her çağrı sessizce None döner.
@@ -1952,13 +2420,13 @@ async def mac_isle(bot, mac_data: dict,
         lig_d       = mac_data.get('league', {})
         league_name = lig_d.get('name','Unknown') if isinstance(lig_d,dict) else 'Unknown'
 
-        # ── [V56] E-SPOR ERKEN ÇIKIŞ ───────────────────────────────
-        # Lig adı VEYA takım adı e-spor kalıbına girerse hemen atla
-        _esports_full = f"{league_name} {ev_adi} {dep_adi}".lower()
-        for _esp_pat in LeagueFilter.ALWAYS_REJECT:
-            if re.search(_esp_pat, _esports_full):
-                logger.debug(f"E-spor/reject atlandı: {league_name} [{_esp_pat}]")
-                return None
+        # ── HARD_REJECT ERKEN ÇIKIŞ ───────────────────────────────
+        # Sadece e-spor / fake / virtual maçlar burada erken atlanır.
+        # Kadın/genç/rezerv ANALYSIS_ONLY maçlar erken atlanmaz; analiz için kaydedilir.
+        _allowed0, _cat0, _reason0 = LeagueFilter.check_league(league_name, ev_adi, dep_adi)
+        if _cat0 == LeagueCategory.HARD_REJECT:
+            logger.debug(f"[LEAGUE] Hard reject erken çıkış: {league_name} [{_reason0}]")
+            return None
         # ────────────────────────────────────────────────────────────
         timer       = mac_data.get('timer', {})
         dk          = guvenli_int(timer.get('tm',0)) if isinstance(timer,dict) else 0
@@ -2019,9 +2487,29 @@ telegram_queue: asyncio.Queue = None
 
 
 async def telegram_gondericisi(bot):
+    """Telegram sıra işleyici — Legacy mesaj filtreleri uygulanır"""
+    legacy_patterns = [
+        "💎 SİNYAL",
+        "🎯 EV GOL",
+        "🎯 DEP GOL",
+        "🎯 İY2 GOL",
+        "🎯 İY GOL",
+        "TVPS:",
+        "Proxy xT",
+        "Fpressure",
+    ]
+    
     while True:
         try:
             chat_id, mesaj = await telegram_queue.get()
+            
+            # [V57-FIX-11] Legacy mesaj engelleme
+            if BLOCK_LEGACY_DIAMOND_MESSAGES and isinstance(mesaj, str):
+                if any(p in mesaj for p in legacy_patterns):
+                    logger.warning(f"[V57] Legacy format mesaj engellendi: {mesaj[:50]}...")
+                    telegram_queue.task_done()
+                    continue
+            
             try:
                 await bot.send_message(
                     chat_id=chat_id, text=mesaj, parse_mode="Markdown")
@@ -2064,17 +2552,28 @@ async def ana_dongu():
                 "  ⛔  PASS — Oynama / riskli\n"
                 "  🔕  IGNORE — Erken / değersiz\n\n"
                 "KURALLAR:\n"
-                "• Gol Olacak(S): gol=1+korner≤3+AH≥1.25+dk≥46 → A+\n"
-                "• Ev Gol Atacak(S): 0-0+AH≥2.0 → A+; 0-0+korner≤3 → A\n"
+                "• Gol Olacak(S): gol=1+korner≤3+AH≥1.25+dk≥60 → A+\n"
+                "• Ev Gol Atacak(S): AH yönü EV değilse A üretilmez\n"
                 "• Dep Gol Atacak(S): dk≤15 veya 0-0 → B\n"
-                "• 0-45dk+gol=1+Gol Olacak → IGNORE\n"
+                "• 0-59dk+gol=1+Gol Olacak → IGNORE\n"
                 "• 46-60dk+AH±0.5+Ev/Dep → PASS\n"
-                "• 46-60dk+3-0+Ev Gol → HARD_PASS\n\n"
+                "• 46-60dk+3-0+Ev Gol → HARD_PASS\n• Team-goal AH yönü zorunlu: ters AH cezalı\n• Neutral ligler: sadece A+; hedef takım öndeyse takım golü kapalı\n• Kadın/genç/rezerv: ANALYSIS_ONLY, Telegram kapalı\n\n"
                 "Eski Gemini/Claude/Excel filtreleri KALDIRILDI.\n"
                 "Sinyaller bekleniyor..."
             ),
             parse_mode=None
         )
+        
+        # [V57] Self-test fonksiyonlarını çalıştır
+        logger.info("[V57] Self-test başlatılıyor...")
+        test1_ok = self_test_classify_live_signal()
+        test2_ok = self_test_league_categories()
+        
+        if test1_ok and test2_ok:
+            logger.info("[V57] ✅ Tüm self-test'ler başarılı")
+        else:
+            logger.warning("[V57] ⚠️ Bazı self-test'ler başarısız — devam etmek riskli")
+    
     except Exception as e:
         logger.error(f"Bot başlatma:{e}"); return
 
@@ -2148,6 +2647,54 @@ async def ana_dongu():
 # ============================================================================
 # GİRİŞ
 # ============================================================================
+
+
+# ============================================================================
+# V57 SELF TEST
+# ============================================================================
+
+def self_test_v57():
+    """V57 çekirdek sınıflandırıcı hızlı testleri."""
+    tests = [
+        ("29dk 1-0 Gol Olacak ignore", ("Gol Olacak (S)", 29, 1, 0, 1, 2, -0.75), "IGNORE"),
+        ("59dk 1-0 Gol Olacak ignore", ("Gol Olacak (S)", 59, 1, 0, 1, 2, -1.25), "IGNORE"),
+        ("60dk 1-0 Gol Olacak A/A+", ("Gol Olacak (S)", 60, 1, 0, 1, 2, -1.25), ("A+", "A")),
+        ("50dk Ev Gol AH0.5 PASS", ("Ev Gol Atacak (S)", 50, 1, 0, 1, 4, -0.50), "PASS"),
+        ("Pisa ev gol ters AH Telegram dışı", ("Ev Gol Atacak (S)", 21, 0, 1, 1, 2, +1.00), ("B", "LOW_VALUE", "PASS")),
+        ("Napoli dep gol yön doğru ama hedef önde → Telegram dışı", ("Dep Gol Atacak (S)", 21, 0, 1, 1, 2, +1.00), ("LOW_VALUE", "B")),
+        ("Lipno 0-2 erken Gol Olacak IGNORE", ("Gol Olacak (S)", 12, 0, 2, 0, 0, +1.00), "IGNORE"),
+    ]
+
+    ok_all = True
+    for name, args, expected in tests:
+        sonuc = classify_live_signal(*args)
+        got = sonuc["sinyal"]
+        if isinstance(expected, tuple):
+            ok = got in expected
+        else:
+            ok = got == expected
+        ok_all = ok_all and ok
+        logger.info(f"[SELFTEST] {name}: got={got}, expected={expected}, ok={ok}")
+    return ok_all
+
+
+def self_test_league_categories():
+    """LeagueCategory hızlı testleri."""
+    tests = [
+        ("England Women Super League", "Chelsea Women", "Arsenal Women", LeagueCategory.ANALYSIS_ONLY),
+        ("Germany Bundesliga", "Bayern", "Dortmund", LeagueCategory.WHITELIST),
+        ("Taiwan Premier League", "A", "B", LeagueCategory.NEUTRAL),
+        ("Esoccer Battle", "A", "B", LeagueCategory.HARD_REJECT),
+        ("Poland III Liga", "Lech Poznan II", "Zawisza Bydgoszcz", LeagueCategory.ANALYSIS_ONLY),
+    ]
+    ok_all = True
+    for league, home, away, expected in tests:
+        allowed, category, reason = LeagueFilter.check_league(league, home, away)
+        ok = category == expected
+        ok_all = ok_all and ok
+        logger.info(f"[LEAGUE TEST] {league} / {home}-{away}: got={category.value}, expected={expected.value}, ok={ok}, reason={reason}")
+    return ok_all
+
 
 if __name__ == "__main__":
     logger.info("🚀 Bot V57 Başlatılıyor...")  # [V57-FIX-6]
