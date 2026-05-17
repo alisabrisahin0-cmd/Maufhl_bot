@@ -135,6 +135,10 @@ class SinyalGecmisi:
             pass
 
 
+# [V57-FIX-1] Global instance — class bittikten hemen sonra tanımla
+sinyal_gecmisi = SinyalGecmisi()
+
+
 # ── Puan tabloları ──────────────────────────────────────────────────────────
 _DAKIKA_PUAN = {
     (0,  15): +25,
@@ -195,6 +199,20 @@ def _sinif_belirle(puan: int) -> str:
     return "PASS"
 
 
+def ah_favori_yonu(ah: float) -> str:
+    """
+    [V57-FIX-4] BetsAPI ev_handicap işaretinden favori yönü tespit et.
+    ah < -0.25 → ev favori (ev -handicap alıyor)
+    ah > +0.25 → deplasman favori
+    arası     → dengeli maç
+    """
+    if ah < -0.25:
+        return "EV"
+    if ah > 0.25:
+        return "DEP"
+    return "DENGE"
+
+
 def classify_live_signal(
     tip: str,
     dakika: float,
@@ -231,17 +249,34 @@ def classify_live_signal(
     neden         = []
     market        = ""
 
+    # [V57-FIX-4] Favori yönü
+    fav = ah_favori_yonu(ah)
+
     # ══════════════════════════════════════════════════════════════════════
     # 1) HARD PASS / IGNORE — önce kontrol et, erken çık
     # ══════════════════════════════════════════════════════════════════════
 
-    # GOL OLACAK (S) — 0-45dk + skor 1-0 veya 0-1 → IGNORE
-    if tip == "Gol Olacak (S)" and dakika <= 45 and toplam_gol == 1:
+    # [V57-FIX-3] GOL OLACAK (S) — eski agresif IGNORE kaldırıldı, granüler kural
+    # 0-30dk + tek gol + yüksek korner (≥7) → IGNORE (baskı kısır, value yok)
+    if tip == "Gol Olacak (S)" and dakika <= 30 and toplam_gol == 1 and toplam_korner >= 7:
         return {
             "sinyal": "IGNORE",
             "puan":   0,
-            "neden":  ["0-45dk + tek gol: erken dakika, bahis değeri yok"],
+            "neden":  ["0-30dk + tek gol + yüksek korner (≥7): value zayıf, kısır baskı"],
             "market": "—",
+        }
+
+    # [V57-FIX-3] 31-45dk + tek gol + düşük korner + AH güçlü → A sinyali üret
+    if (tip == "Gol Olacak (S)"
+            and 31 <= dakika <= 45
+            and toplam_gol == 1
+            and toplam_korner <= 6
+            and ah_abs >= 0.75):
+        return {
+            "sinyal": "A",
+            "puan":   55,
+            "neden":  ["31-45dk + tek gol + korner≤6 + AH≥0.75 → güçlü devam golü beklentisi"],
+            "market": "Gol Olacak / MS 0.5 Üst",
         }
 
     # EV GOL ATACAK (S) — 46-60dk + AH ≈ ±0.5 → PASS
@@ -312,7 +347,17 @@ def classify_live_signal(
     elif tip == "Ev Gol Atacak (S)":
         market = "Ev Gol Atacak / Ev Sıradaki Gol"
 
-        # A+ : skor 0-0 + AH mutlak ≥2.0
+        # [V57-FIX-4] A+ : skor 0-0 + AH mutlak ≥2.0 + ev favori
+        if ev_gol == 0 and dep_gol == 0 and fav == "EV" and ah_abs >= 2.0:
+            neden.append("A+ koşulu: 0-0, ev favori (EV), AH≥2.0 → güçlü ev favori")
+            return {
+                "sinyal": "A+",
+                "puan":   70,
+                "neden":  neden,
+                "market": market,
+            }
+
+        # Eski kural (fav yönü belirsizse de çalışsın): skor 0-0 + AH≥2.0
         if ev_gol == 0 and dep_gol == 0 and ah_abs >= 2.0:
             neden.append("A+ koşulu: skor 0-0, AH≥2.0 → güçlü ev favori")
             return {
@@ -335,6 +380,16 @@ def classify_live_signal(
     # ── DEP GOL ATACAK (S) ────────────────────────────────────────────────
     elif tip == "Dep Gol Atacak (S)":
         market = "Dep Gol Atacak / Dep Sıradaki Gol"
+
+        # [V57-FIX-4] A : skor 0-0 + deplasman favori + AH≥1.25
+        if ev_gol == 0 and dep_gol == 0 and fav == "DEP" and ah_abs >= 1.25:
+            neden.append("A koşulu: 0-0, deplasman favori (DEP), AH≥1.25")
+            return {
+                "sinyal": "A",
+                "puan":   50,
+                "neden":  neden,
+                "market": market,
+            }
 
         # B+ : dakika 0-15
         if dakika <= 15:
@@ -476,13 +531,15 @@ def canli_sinyal_siniflandir(
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# [V57-FIX-2] @dataclass eklendi — AHKinetik() boş çağrılabilir hale geldi
+@dataclass
 class AHKinetik:
     """AH çizgisinin hız ve ivme analizi"""
-    velocity:   float = 0.0   # v_AH = ΔAH/Δt
-    acceleration: float = 0.0  # a_AH = Δv/Δt
+    velocity:       float = 0.0   # v_AH = ΔAH/Δt
+    acceleration:   float = 0.0   # a_AH = Δv/Δt
     momentum_score: float = 0.0
-    yon: str = 'sabit'         # 'daralma' | 'genisleme' | 'sabit'
-    clv_proxy: float = 0.0
+    yon:            str   = 'sabit'  # 'daralma' | 'genisleme' | 'sabit'
+    clv_proxy:      float = 0.0
 
 
 class AHHareketTakibi:
@@ -1828,15 +1885,14 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
         # ══════════════════════════════════════════════════════════════════
         # [V57] CANLI SİNYAL SINIFLANDIRICI — classify_live_signal()
         # ══════════════════════════════════════════════════════════════════
-        # Eski Gemini/Claude/Excel/BenimStrateji filtreleri kaldırıldı.
-        # Üç tip için bağımsız olarak çalışır: Gol Olacak / Ev Gol / Dep Gol
-        # A+/A/B → Telegram; LOW_VALUE/PASS/IGNORE → sessiz log
+        # [V57-FIX-5] Tek mesaj: üç tip için hesapla, en yüksek puanlı A+/A
+        # gönder. B sadece loglanır. LOW_VALUE/PASS/IGNORE sessiz kalır.
         # ══════════════════════════════════════════════════════════════════
         try:
-            _cs_ah      = float(ah_data['ev_handicap']) if ah_data else 0.0
-            _cs_ev_c    = int(v.get('ev_korner', 0) or 0)
-            _cs_dep_c   = int(v.get('dep_korner', 0) or 0)
-            _cs_mesajlar = []
+            _cs_ah    = float(ah_data['ev_handicap']) if ah_data else 0.0
+            _cs_ev_c  = int(v.get('ev_korner', 0) or 0)
+            _cs_dep_c = int(v.get('dep_korner', 0) or 0)
+            _adaylar  = []   # (puan, sinyal_kodu, mesaj, tip)
 
             for _tip in ("Gol Olacak (S)", "Ev Gol Atacak (S)", "Dep Gol Atacak (S)"):
                 _cs_mesaj, _cs_sonuc = canli_sinyal_siniflandir(
@@ -1855,25 +1911,30 @@ async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
                 logger.debug(
                     f"[V57] {_tip} → {_cs_sonuc['sinyal']} "
                     f"(puan={_cs_sonuc['puan']})")
-                if _cs_mesaj:
-                    _dup_key = (f"V57_{_tip[:3]}_{int(dk // 5) * 5}_"
-                                f"{ev_gol}-{dep_gol}")
-                    if not sinyal_gecmisi.zaten_gonderildi_mi(
-                            event_id, int(dk), _dup_key):
-                        sinyal_gecmisi.kaydet(event_id, int(dk), _dup_key)
-                        _cs_mesajlar.append(_cs_mesaj)
-                        logger.info(
-                            f"[V57] ✅ {_tip} → {_cs_sonuc['sinyal']} | "
-                            f"dk={dk:.0f} skor={skor} AH={_cs_ah:+.2f}")
 
-            if _cs_mesajlar:
-                # İlk mesaj ana, ikincisi gemini slotu, üçüncü extra
-                _m = _cs_mesajlar
-                return (
-                    _m[0] if len(_m) > 0 else None,
-                    _m[1] if len(_m) > 1 else None,
-                    _m[2] if len(_m) > 2 else None,
-                )
+                if _cs_sonuc["sinyal"] in ("A+", "A"):
+                    _adaylar.append(
+                        (_cs_sonuc["puan"], _cs_sonuc["sinyal"], _cs_mesaj, _tip))
+                elif _cs_sonuc["sinyal"] == "B":
+                    logger.info(
+                        f"[V57] B sinyal (logda): {_tip} dk={dk:.0f} "
+                        f"puan={_cs_sonuc['puan']} AH={_cs_ah:+.2f}")
+
+            if _adaylar:
+                # En yüksek puanlı tek adayı seç
+                _adaylar.sort(reverse=True, key=lambda x: x[0])
+                _en_iyi_puan, _en_iyi_sinyal, _en_iyi_mesaj, _en_iyi_tip = _adaylar[0]
+
+                _dup_key = (f"V57_{_en_iyi_tip[:3]}_{int(dk // 5) * 5}_"
+                            f"{ev_gol}-{dep_gol}")
+                if not sinyal_gecmisi.zaten_gonderildi_mi(
+                        event_id, int(dk), _dup_key):
+                    sinyal_gecmisi.kaydet(event_id, int(dk), _dup_key)
+                    logger.info(
+                        f"[V57] ✅ EN İYİ: {_en_iyi_tip} → {_en_iyi_sinyal} | "
+                        f"puan={_en_iyi_puan} dk={dk:.0f} skor={skor} AH={_cs_ah:+.2f}")
+                    return _en_iyi_mesaj, None, None
+
         except Exception as _cs_err:
             logger.debug(f"[V57] Sınıflandırıcı hata: {_cs_err}")
             import traceback; logger.debug(traceback.format_exc())
@@ -2215,7 +2276,7 @@ async def ana_dongu():
 # ============================================================================
 
 if __name__ == "__main__":
-    logger.info("🚀 Bot V52 Başlatılıyor...")
+    logger.info("🚀 Bot V57 Başlatılıyor...")  # [V57-FIX-6]
     logger.info(
         f"TG:{'✅' if TELEGRAM_TOKEN else '❌'} | "
         f"Chat:{'✅' if CHAT_ID else '❌'} | "
