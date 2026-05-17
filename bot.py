@@ -2136,6 +2136,83 @@ async def telegram_gondericisi(bot):
 # ANA DONGU
 # ============================================================================
 
+def self_test_classify_live_signal():
+    """classify_live_signal() fonksiyonunun önemli kural testleri"""
+    tests = [
+        {
+            "name": "29dk 1-0 Gol Olacak <50 PASS",
+            "args": ("Gol Olacak (S)", 29, 1, 0, 1, 2, -0.75),
+            "expected": "PASS",
+        },
+        {
+            "name": "59dk 1-0 Gol Olacak IGNORE",
+            "args": ("Gol Olacak (S)", 59, 1, 0, 1, 2, -1.25),
+            "expected": "IGNORE",
+        },
+        {
+            "name": "60dk 1-0 Gol Olacak A+",
+            "args": ("Gol Olacak (S)", 60, 1, 0, 1, 0, -1.25),
+            "expected_in": ("A+", "A"),
+        },
+        {
+            "name": "60dk 1-0 Gol Olacak AH=0.5 PASS",
+            "args": ("Gol Olacak (S)", 60, 1, 0, 1, 2, 0.5),
+            "expected": "PASS",
+        },
+        {
+            "name": "50dk Ev Gol AH=0.5 PASS",
+            "args": ("Ev Gol Atacak (S)", 50, 1, 0, 1, 4, -0.50),
+            "expected": "PASS",
+        },
+        {
+            "name": "5dk 0-0 Gol Olacak <50 PASS",
+            "args": ("Gol Olacak (S)", 5, 0, 0, 0, 0, -1.75),
+            "expected": "PASS",
+        },
+        {
+            "name": "45dk Ev Gol 0-0 AH=0 B/log-only",
+            "args": ("Ev Gol Atacak (S)", 45, 0, 0, 1, 2, 0.0),
+            "expected_in": ("B", "LOW_VALUE", "PASS"),
+        },
+        {
+            "name": "5dk Ev Gol güçlü AH ama çok erken PASS",
+            "args": ("Ev Gol Atacak (S)", 5, 0, 1, 1, 1, -1.25),
+            "expected": "PASS",
+        },
+        {
+            "name": "29dk Ev Gol AH=0.25 zayıf PASS",
+            "args": ("Ev Gol Atacak (S)", 29, 0, 0, 1, 0, 0.25),
+            "expected": "PASS",
+        },
+    ]
+
+    logger.info("[SELFTEST] classify_live_signal() testleri başladı")
+    passed = 0
+    failed = 0
+    
+    for t in tests:
+        sonuc = classify_live_signal(*t["args"])
+        expected = t.get("expected")
+        expected_in = t.get("expected_in", ())
+        
+        if expected:
+            ok = sonuc["sinyal"] == expected
+        else:
+            ok = sonuc["sinyal"] in expected_in
+        
+        if ok:
+            logger.info(f"  ✅ {t['name']} → {sonuc['sinyal']}")
+            passed += 1
+        else:
+            logger.warning(f"  ❌ {t['name']} → {sonuc['sinyal']} "
+                          f"(beklenen: {expected or expected_in})")
+            failed += 1
+    
+    logger.info(f"[SELFTEST] Sonuç: {passed} geçti, {failed} başarısız")
+    return failed == 0
+
+
+
 async def ana_dongu():
     global telegram_queue
     telegram_queue = asyncio.Queue()
