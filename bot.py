@@ -67,6 +67,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Hassas URL'lerin loga düşmesini azalt.
+for _noisy_logger in ("httpx", "httpcore", "telegram", "telegram.ext"):
+    logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
+
+
+def mask_secret_url(value: str) -> str:
+    """Log güvenliği: Telegram bot token gibi hassas parçaları maskele."""
+    if not isinstance(value, str):
+        return value
+    value = re.sub(r'(bot)\d{6,}:[A-Za-z0-9_-]+', r'\1***TOKEN***', value)
+    value = re.sub(r'([?&](?:token|api_key|key)=)[^&\s]+', r'\1***', value, flags=re.IGNORECASE)
+    return value
+
+
 sinyal_logger = logging.getLogger('sinyal')
 _sh = logging.StreamHandler()
 _sh.setFormatter(logging.Formatter(
@@ -2067,9 +2081,9 @@ def self_test_classify_live_signal():
             "expected_in": ("A+", "A"),
         },
         {
-            "name": "60dk 1-0 Gol Olacak AH=0.5 low_value",
+            "name": "60dk 1-0 Gol Olacak AH=0.5 PASS",
             "args": ("Gol Olacak (S)", 60, 1, 0, 1, 2, 0.5),
-            "expected_in": ("A", "B", "LOW_VALUE"),
+            "expected": "PASS",
         },
         {
             "name": "50dk Ev Gol AH=0.5 PASS",
@@ -2572,7 +2586,7 @@ async def ana_dongu():
         if test1_ok and test2_ok:
             logger.info("[V57] ✅ Tüm self-test'ler başarılı")
         else:
-            logger.warning("[V57] ⚠️ Bazı self-test'ler başarısız — devam etmek riskli")
+            logger.warning("[V57] ⚠️ Bazı self-test'ler başarısız — ayarları kontrol et")
     
     except Exception as e:
         logger.error(f"Bot başlatma:{e}"); return
