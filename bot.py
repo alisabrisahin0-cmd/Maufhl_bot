@@ -1483,6 +1483,63 @@ class SignalResult:
 # ILK YARI GOL MODULU
 # ============================================================================
 
+class VeriKorumaKatmani:
+    def __init__(self):
+        self.s_kod   = {'S1':'SOT','S2':'Korner','S3':'TA','S4':'DA','SC':'Gol'}
+        self.anomali = 0
+        self.toplam  = 0
+
+    def yeni_format_parse(self, stats):
+        try:
+            if 'corners' in stats and isinstance(stats.get('corners'), list):
+                def _g(k, i): return stats.get(k, ['0','0'])[i]
+                ev  = {'S1':_g('on_target',0),'S2':_g('corners',0),
+                       'S3':_g('attacks',0),'S4':_g('dangerous_attacks',0),
+                       'SC':_g('goals',0)}
+                dep = {'S1':_g('on_target',1),'S2':_g('corners',1),
+                       'S3':_g('attacks',1),'S4':_g('dangerous_attacks',1),
+                       'SC':_g('goals',1)}
+                return ev, dep
+        except Exception as e:
+            logger.error(f"Parse:{e}")
+        return None
+
+    def veri_cikart_guvenli(self, ev_v, dep_v):
+        self.toplam += 1
+        ters = {v:k for k,v in self.s_kod.items()}
+        try:
+            veri = {
+                'ev_sot':     guvenli_int(ev_v.get(ters.get('SOT',    'S1'), 0)),
+                'ev_korner':  guvenli_int(ev_v.get(ters.get('Korner', 'S2'), 0)),
+                'ev_ta':      guvenli_int(ev_v.get(ters.get('TA',     'S3'), 0)),
+                'ev_da':      guvenli_int(ev_v.get(ters.get('DA',     'S4'), 0)),
+                'ev_gol':     guvenli_int(ev_v.get(ters.get('Gol',    'SC'), 0)),
+                'dep_sot':    guvenli_int(dep_v.get(ters.get('SOT',   'S1'), 0)),
+                'dep_korner': guvenli_int(dep_v.get(ters.get('Korner','S2'), 0)),
+                'dep_ta':     guvenli_int(dep_v.get(ters.get('TA',    'S3'), 0)),
+                'dep_da':     guvenli_int(dep_v.get(ters.get('DA',    'S4'), 0)),
+                'dep_gol':    guvenli_int(dep_v.get(ters.get('Gol',   'SC'), 0)),
+                # [K2] Kırmızı kart verileri — S7 kodu
+                'ev_kirmizi':  guvenli_int(ev_v.get('S7', 0)),
+                'dep_kirmizi': guvenli_int(dep_v.get('S7', 0)),
+            }
+            ta  = veri['ev_ta']  + veri['dep_ta']
+            da  = veri['ev_da']  + veri['dep_da']
+            sot = veri['ev_sot'] + veri['dep_sot']
+            gol = veri['ev_gol'] + veri['dep_gol']
+            if ta < da or da < sot or sot < gol: self.anomali += 1
+            return veri
+        except Exception as e:
+            logger.error(f"veri_cikart:{e}")
+            return None
+
+    def istatistik(self):
+        if self.toplam:
+            logger.info(f"VeriKoruma:{self.toplam} kontrol, "
+                        f"{self.anomali} anomali "
+                        f"(%{self.anomali/self.toplam*100:.1f})")
+
+
 veri_koruma = VeriKorumaKatmani()
 
 
