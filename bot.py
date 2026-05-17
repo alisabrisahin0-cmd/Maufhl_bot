@@ -98,7 +98,24 @@ SEND_NEUTRAL_LEAGUE_A_ONLY    = True   # Neutral liglerde sadece A+ Telegram'a g
 REQUIRE_AH_FOR_SIGNAL         = True   # AH verisi yoksa sinyal üretilmez
 BLOCK_LEGACY_DIAMOND_MESSAGES = True   # 💎 SİNYAL formatı Telegram'a gitmez
 ENABLE_ANALYSIS_ONLY_LOGGING  = True   # Kadın/genç/rezerv ligleri analysis loglanır
-ENABLE_WOMEN_MAIN_TELEGRAM    = False  # Kadın ligleri şimdi ana Telegram'a gitmez
+ENABLE_WOMEN_MAIN_TELEGRAM    = False
+# ============================================================================
+# V57 FINAL V5 — STRATEJİ UYUM KATMANI
+# ============================================================================
+# Gönderilen canlı bildirimlerden çıkan son güvenlik kararları:
+# - Gol Olacak: 50.dk altı Telegram kapalı
+# - Ev/Dep Gol: 15.dk altı Telegram kapalı
+# - Ev/Dep Gol: AH yok/zayıf/dengede A/A+ yok
+# - Alt liglerde Ev/Dep Gol Telegram kapalı
+# - Skorline 0-0 + dakika + korner tek başına A yapamaz
+TEAM_GOAL_MIN_TELEGRAM_MINUTE = 15
+TEAM_GOAL_MIN_A_MINUTE        = 20
+TEAM_GOAL_REQUIRED_AH_ABS     = 0.75
+TEAM_GOAL_STRONG_AH_ABS       = 1.25
+BLOCK_LOWER_TIER_TEAM_GOALS   = True
+BLOCK_TEAM_GOAL_IF_AH_WEAK    = True
+GOL_OLACAK_MIN_TELEGRAM_MINUTE = 50
+  # Kadın ligleri şimdi ana Telegram'a gitmez
 
 # ============================================================================
 # KONFIGÜRASYON
@@ -382,6 +399,60 @@ def _leading_team_goal_penalty(tip: str, ev_gol: int, dep_gol: int, dakika: floa
     return 0, ""
 
 
+
+# ============================================================================
+# V57 FINAL V5 — ALT LİG / TAKIM GOLÜ YARDIMCI FİLTRELER
+# ============================================================================
+
+LOWER_TIER_LEAGUE_PATTERNS = [
+    r'\bserie\s*d\b',
+    r'\biii\s*liga\b',
+    r'\b3\.\s*liga\b',
+    r'\b2\.div\b',
+    r'\b2\s*div\b',
+    r'\bdivision\s*2\b',
+    r'\bdivision\s*3\b',
+    r'\bregional\b',
+    r'\bregionalliga\b',
+    r'\bamateur\b',
+    r'\bnon[-\s]?league\b',
+    r'\bfourth\b',
+    r'\bfifth\b',
+]
+
+def is_lower_tier_league(league_name: str) -> bool:
+    """Serie D / III Liga / 2.div / regional gibi alt ligleri tespit eder."""
+    ll = (league_name or "").lower()
+    return any(re.search(pat, ll) for pat in LOWER_TIER_LEAGUE_PATTERNS)
+
+def _target_team_trailing(tip: str, ev_gol: int, dep_gol: int) -> bool:
+    """Takım golü marketinde hedef takım geride mi?"""
+    if tip == "Ev Gol Atacak (S)":
+        return ev_gol < dep_gol
+    if tip == "Dep Gol Atacak (S)":
+        return dep_gol < ev_gol
+    return False
+
+def _target_team_level(tip: str, ev_gol: int, dep_gol: int) -> bool:
+    """Takım golü marketinde hedef takım berabere mi?"""
+    if tip in ("Ev Gol Atacak (S)", "Dep Gol Atacak (S)"):
+        return ev_gol == dep_gol
+    return False
+
+def _team_goal_ah_supported(tip: str, ah: float, min_abs: float = None) -> bool:
+    """Ev/Dep Gol marketinde AH yönü hedef takımı destekliyor mu?"""
+    min_abs = TEAM_GOAL_REQUIRED_AH_ABS if min_abs is None else min_abs
+    fav = ah_favori_yonu(ah)
+    ah_abs = abs(ah)
+    if tip == "Ev Gol Atacak (S)":
+        return fav == "EV" and ah_abs >= min_abs
+    if tip == "Dep Gol Atacak (S)":
+        return fav == "DEP" and ah_abs >= min_abs
+    return False
+
+def _team_goal_market(tip: str) -> bool:
+    return tip in ("Ev Gol Atacak (S)", "Dep Gol Atacak (S)")
+
 def classify_live_signal(
     tip: str,
     dakika: float,
@@ -390,6 +461,7 @@ def classify_live_signal(
     ev_corner: int,
     dep_corner: int,
     ah: float,
+    league_name: str = "",
 ) -> dict:
     """
     Canlı maç sinyalini sınıflandırır.
@@ -434,6 +506,47 @@ def classify_live_signal(
             "neden":  [f"{dakika:.0f}dk < 50: Gol Olacak marketi için value yok, Telegram kapalı"],
             "market": "—",
         }
+
+    # [V57-FINAL-V5] GOL OLACAK: 50.dk altı ana Telegram kapalı.
+    # Enskede 5.dk gibi erken A/A+ sinyaller artık çıkmaz.
+    if tip == "Gol Olacak (S)" and dakika < GOL_OLACAK_MIN_TELEGRAM_MINUTE:
+        return {
+            "sinyal": "PASS",
+            "puan":   0,
+            "neden":  [f"{dakika:.0f}dk < {GOL_OLACAK_MIN_TELEGRAM_MINUTE}: Gol Olacak marketi için value yok, Telegram kapalı"],
+            "market": "—",
+        }
+
+    # [V57-FINAL-V5] TAKIM GOLÜ: 15.dk altı Telegram kapalı.
+    # Prato/Brentford gibi 5.dk Ev Gol A/A+ spam'i kesilir.
+    if _team_goal_market(tip) and dakika < TEAM_GOAL_MIN_TELEGRAM_MINUTE:
+        return {
+            "sinyal": "PASS",
+            "puan":   0,
+            "neden":  [f"{dakika:.0f}dk: takım golü marketi için çok erken, Telegram kapalı"],
+            "market": "—",
+        }
+
+    # [V57-FINAL-V5] ALT LİG: Ev/Dep Gol marketleri ana Telegram kapalı.
+    # Alt ligler oynak olduğu için bu sinyaller analysis/log dışına çıkmasın.
+    if BLOCK_LOWER_TIER_TEAM_GOALS and _team_goal_market(tip) and is_lower_tier_league(league_name):
+        return {
+            "sinyal": "PASS",
+            "puan":   0,
+            "neden":  [f"{league_name}: alt lig takım golü Telegram kapalı"],
+            "market": "—",
+        }
+
+    # [V57-FINAL-V5] TAKIM GOLÜ: 35.dk öncesi AH yön desteği şart.
+    # AH 0.00 / 0.25 / ters yön ise dakika+korner+0-0 bonusu A yapmasın.
+    if BLOCK_TEAM_GOAL_IF_AH_WEAK and _team_goal_market(tip) and dakika < 35:
+        if not _team_goal_ah_supported(tip, ah, TEAM_GOAL_REQUIRED_AH_ABS):
+            return {
+                "sinyal": "PASS",
+                "puan":   0,
+                "neden":  [f"{dakika:.0f}dk: takım golü için AH yön desteği yok/zayıf, Telegram kapalı"],
+                "market": "—",
+            }
 
     # GOL OLACAK (S): tek gol + dakika < 60 → value yok, IGNORE
     # 60. dakikadan önce 1-0 / 0-1 sinyali güvenilir değil.
@@ -559,10 +672,12 @@ def classify_live_signal(
         # Eski fav-yönsüz A+ kuralı kaldırıldı.
         # Ev golünde güçlü AH sadece fav == EV ise değerli sayılır.
 
-        # A : skor 0-0 + korner 0-3 + EV yönlü AH desteği
-        # AH yok / DENGE iken Genoa gibi maçlar A üretmemeli.
-        if ev_gol == 0 and dep_gol == 0 and toplam_korner <= 3 and fav == "EV" and ah_abs >= 0.75:
-            neden.append("A koşulu: 0-0, korner≤3, EV yönlü AH≥0.75")
+        # A : skor 0-0 + korner 0-3 + EV yönlü AH + dakika olgunluğu
+        # Genoa/AH yok ve Livingston 5.dk gibi sinyaller burada kesilir.
+        if (ev_gol == 0 and dep_gol == 0 and toplam_korner <= 3
+                and dakika >= TEAM_GOAL_MIN_A_MINUTE
+                and fav == "EV" and ah_abs >= TEAM_GOAL_REQUIRED_AH_ABS):
+            neden.append("A koşulu: 0-0, korner≤3, dk≥20, EV yönlü AH≥0.75")
             return {
                 "sinyal": "A",
                 "puan":   50,
@@ -640,6 +755,13 @@ def classify_live_signal(
     # Riskli bölge cezası: çok korner (7-9) ek uyarı
     if 7 <= toplam_korner <= 9:
         neden.append("⚠️ Yüksek korner (7-9): risk bölgesi")
+
+    # [V57-FINAL-V5] Takım golü marketinde AH desteği yok/zayıfsa A/A+ üretme.
+    # Dakika + korner + 0-0 skorline tek başına takım golü sinyali yapamaz.
+    if _team_goal_market(tip) and not _team_goal_ah_supported(tip, ah, TEAM_GOAL_REQUIRED_AH_ABS):
+        if puan >= 45:
+            neden.append("A engeli: takım golü için AH yön desteği yok/zayıf, maksimum B/log-only")
+        puan = min(puan, 35)
 
     sinyal = _sinif_belirle(puan)
 
@@ -729,7 +851,7 @@ def canli_sinyal_siniflandir(
     - SEND_B_SIGNALS=True: A+, A, B
     """
     sonuc = classify_live_signal(tip, dakika, ev_gol, dep_gol,
-                                  ev_corner, dep_corner, ah)
+                                  ev_corner, dep_corner, ah, league)
     
     sendable = ("A+", "A") if not SEND_B_SIGNALS else ("A+", "A", "B")
     
@@ -2077,9 +2199,9 @@ def self_test_classify_live_signal():
     """classify_live_signal() fonksiyonunun önemli kural testleri"""
     tests = [
         {
-            "name": "29dk 1-0 Gol Olacak IGNORE",
+            "name": "29dk 1-0 Gol Olacak <50 PASS",
             "args": ("Gol Olacak (S)", 29, 1, 0, 1, 2, -0.75),
-            "expected": "IGNORE",
+            "expected": "PASS",
         },
         {
             "name": "59dk 1-0 Gol Olacak IGNORE",
@@ -2110,6 +2232,16 @@ def self_test_classify_live_signal():
             "name": "45dk Ev Gol 0-0 AH=0 B/log-only",
             "args": ("Ev Gol Atacak (S)", 45, 0, 0, 1, 2, 0.0),
             "expected_in": ("B", "LOW_VALUE", "PASS"),
+        },
+        {
+            "name": "5dk Ev Gol güçlü AH ama çok erken PASS",
+            "args": ("Ev Gol Atacak (S)", 5, 0, 1, 1, 1, -1.25),
+            "expected": "PASS",
+        },
+        {
+            "name": "29dk Ev Gol AH=0.25 zayıf PASS",
+            "args": ("Ev Gol Atacak (S)", 29, 0, 0, 1, 0, 0.25),
+            "expected": "PASS",
         },
     ]
 
