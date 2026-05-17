@@ -1384,167 +1384,10 @@ def fpressure_endeks_hesapla(korner: int, sot: int, da: int,
 # [R6] SHANNON ENTROPISI
 # ============================================================================
 
-class MacEntropisi:
-    """
-    [R6] 15 dakikalik pencerede Shannon Entropisi.
-    H = -? p_i x log2(p_i)
-
-    Yuksek entropi: kaotik, git-gelli mac -> gol olasiligi var
-    Dusuk entropi: tek takim domine / statik oyun -> rolanti riski
-    """
-
-    def __init__(self):
-        # {event_id: [(dakika, da, sot, korner), ...]}
-        self._olaylar: Dict[str, List[Tuple]] = {}
-
-    def olay_ekle(self, event_id: str, dakika: int,
-                  da: int, sot: int, korner: int):
-        if event_id not in self._olaylar:
-            self._olaylar[event_id] = []
-        self._olaylar[event_id].append((dakika, da, sot, korner))
-        # 60 dakikadan eski kayitlari sil
-        self._olaylar[event_id] = [
-            o for o in self._olaylar[event_id] if dakika - o[0] <= 60
-        ]
-
-    def entropi_hesapla(self, event_id: str,
-                        dakika: int) -> Tuple[float, str]:
-        """15dk penceredeki DA + SOT dagiliminin Shannon entropisi"""
-        olaylar = self._olaylar.get(event_id, [])
-        pencere = [o for o in olaylar if dakika - o[0] <= 15]
-
-        if not pencere:
-            return 0.5, "Veri yok - notr entropi"
-
-        # Her 5 dakikalik dilim icin olay yogunlugu
-        dilimler = {}
-        for o in pencere:
-            dilim = (o[0] // 5) * 5
-            dilimler[dilim] = dilimler.get(dilim, 0) + o[1] + o[2]
-
-        toplam = sum(dilimler.values())
-        if toplam == 0:
-            return 0.0, "Olay yok - dusuk entropi"
-
-        # Shannon H = -? p_i x log2(p_i)
-        H = 0.0
-        for v in dilimler.values():
-            p = v / toplam
-            if p > 0:
-                H -= p * math.log2(p)
-
-        # Normalize et: maks entropi = log2(n_dilim)
-        n_dilim = max(len(dilimler), 1)
-        H_norm  = H / math.log2(n_dilim + 1)
-
-        if H_norm >= 0.7:
-            return round(H_norm, 3), f"YUKSEK ENTROPI({H_norm:.2f}) - kaotik mac"
-        elif H_norm >= 0.4:
-            return round(H_norm, 3), f"ORTA ENTROPI({H_norm:.2f})"
-        else:
-            return round(H_norm, 3), f"DUSUK ENTROPI({H_norm:.2f}) - statik/rolanti"
-
-    def match_state_score(self, event_id: str, dakika: int,
-                          ev_gol: int, dep_gol: int) -> float:
-        """
-        [R7] MS_score = H(t) x e^(-?(t-45)) x chaos(score_diff)
-        ? = 0.03 (bookmaker time decay sabiti)
-        """
-        H, _ = self.entropi_hesapla(event_id, dakika)
-
-        # Zaman erimesi (time decay)
-        lam      = 0.03
-        td       = math.exp(-lam * max(dakika - 45, 0))
-
-        # Kaos fonksiyonu: beraberikente yuksek, fark acilinca duser
-        fark     = abs(ev_gol - dep_gol)
-        chaos    = 1.0 / (1 + fark * 0.5)
-
-        ms_score = H * td * chaos
-        return round(ms_score, 3)
-
-
-mac_entropisi = MacEntropisi()
 
 
 # ============================================================================
 # [R8] TVPS - TRUE VALUE PROBABILITY SCORE
-# ============================================================================
-
-class TVPSKatmani:
-    """
-    [R8] True Value Probability Score.
-    Tum modullerin ciktilarini sigmoid ile 0-1'e sikistirir.
-    Piyasa zimni olasiligiyla karsilastirir.
-    TVPS > 0.05 -> +EV onayi
-
-    [R9] Kelly Kriteri stake hesabi (Quarter Kelly)
-    """
-
-    TVPS_ESIGI = 0.05   # %5 edge minimum
-
-    @staticmethod
-    def hesapla(
-        da_ivmesi:       float,
-        proxy_xt:        float,
-        ah_momentum:     float,
-        true_rlm_prob:   float,
-        corner_deficit:  bool,
-        sahte_baski:     bool,
-        fpressure:       float,
-        entropi:         float,
-        skor_bonus:      float,
-        lig_carpan:      float,
-        market_odds:     float
-    ) -> Tuple[float, float, bool, str]:
-        """
-        Doner: (tvps_score, kelly_stake, ev_pozitif, aciklama)
-        """
-        if market_odds <= 1.0:
-            return 0.0, 0.0, False, "Gecersiz oran"
-
-        # Zimni olasilik (vig arindirilmis yaklasim)
-        implied_prob = 1 / market_odds
-
-        # Feature vektoru x agirliklar
-        ham_skor = (
-            TVPS_AGIRLIKLAR['da_ivmesi']      * min(da_ivmesi, 3.0)    +
-            TVPS_AGIRLIKLAR['proxy_xt']       * min(proxy_xt * 10, 3.0) +
-            TVPS_AGIRLIKLAR['ah_momentum']    * min(abs(ah_momentum), 2.0) +
-            TVPS_AGIRLIKLAR['true_rlm']       * true_rlm_prob          +
-            TVPS_AGIRLIKLAR['corner_deficit'] * (1.0 if corner_deficit else 0.0) +
-            TVPS_AGIRLIKLAR['sahte_baski']    * (1.0 if sahte_baski else 0.0)    +
-            TVPS_AGIRLIKLAR['fpressure_endeks'] * min(fpressure / 5.0, 1.0) +
-            TVPS_AGIRLIKLAR['entropi_yuksek'] * min(entropi, 1.0)            +
-            TVPS_AGIRLIKLAR['skor_altin']     * (skor_bonus / 3.0)           +
-            TVPS_AGIRLIKLAR['lig_carpan_bonus'] * (lig_carpan - 1.0)
-        )
-
-        # Gercek olasilik (sigmoid ile 0-1 arasina)
-        true_prob = sigmoid(ham_skor)
-
-        # TVPS = true_prob / implied_prob - 1 (goreceli avantaj)
-        tvps = (true_prob / max(implied_prob, 0.001)) - 1.0
-
-        ev_pozitif = tvps > TVPSKatmani.TVPS_ESIGI
-
-        # [R9] Quarter Kelly stake
-        # K = (TVPS) / (odds - 1) x 0.25
-        kelly_tam = tvps / max(market_odds - 1, 0.01)
-        kelly_q   = max(0.0, min(kelly_tam * 0.25, 0.05))  # maks %5 kasa
-
-        aciklama = (
-            f"TVPS:{tvps:+.3f} | TrueP:{true_prob:.2%} | "
-            f"ImpliedP:{implied_prob:.2%} | "
-            f"Kelly?:{kelly_q:.2%} kasa | "
-            f"{'[OK] +EV' if ev_pozitif else '[ERR] -EV'}"
-        )
-
-        return round(tvps, 4), round(kelly_q, 4), ev_pozitif, aciklama
-
-
-# ============================================================================
-# TAKIM ISTATISTIKLERI
 # ============================================================================
 
 @dataclass
@@ -1639,362 +1482,6 @@ class SignalResult:
 # ============================================================================
 # ILK YARI GOL MODULU
 # ============================================================================
-
-class IYGolModule:
-    @staticmethod
-    def check(minute: int, home_score: int, away_score: int,
-              home: TeamStats, away: TeamStats,
-              league_name: str = "",
-              event_id: str = "") -> SignalResult:
-
-        if not (15 <= minute <= 40):
-            return SignalResult(False, None, 0.0, "Dakika disi", {})
-        if home_score + away_score > 1:
-            return SignalResult(False, None, 0.0, "IY skor yuksek", {})
-
-        total_da   = home.da + away.da
-        da_esik    = LeagueFilter.get_da_threshold(league_name)
-        da_per_min = total_da / minute if minute > 0 else 0
-
-        if da_per_min < da_esik:
-            return SignalResult(False, None, 0.0,
-                f"DA dusuk:{da_per_min:.2f}<{da_esik}", {})
-
-        # [AH-8] Erken asiri korner filtresi
-        toplam_korner = home.korner + away.korner
-        if (toplam_korner / max(minute, 1)) > 0.3 and home.sot + away.sot < 3:
-            return SignalResult(False, None, 0.0,
-                "Sahte baski: Yuksek kose/dk, dusuk SOT", {})
-
-        # [R2] Proxy xT
-        xt, xt_msg = proxy_xt_hesapla(
-            home.sot, home.da, home.ta, home.korner,
-            home_score, away_score, minute)
-
-        score  = 5.0 + min(da_per_min * 2, 5.0) + xt * 5
-        reason = f"IY Gol - DA:{da_per_min:.2f} | {xt_msg}"
-        if 24 <= minute <= 36:
-            score  *= 1.8
-            reason += " | ALTIN PENCERE(x1.8)"
-
-        # [R7] Entropi bonusu
-        if event_id:
-            ms = mac_entropisi.match_state_score(
-                event_id, minute, home_score, away_score)
-            if ms > 0.4:
-                score  += ms * 3
-                reason += f" | MS:{ms:.2f}"
-
-        return SignalResult(True, SignalType.IY_GOL,
-                            round(score, 2), reason,
-                            {'da_per_min': round(da_per_min, 2), 'xt': xt})
-
-
-# ============================================================================
-# EV/DEPLASMAN GOL MODULU
-# ============================================================================
-
-class EvDepGolModule:
-    @staticmethod
-    def check(minute: int, home: TeamStats, away: TeamStats,
-              ah_home: float, ah_away: float,
-              league_name: str = "",
-              event_id: str = "",
-              ev_gol: int = 0, dep_gol: int = 0,
-              market_odds: float = 0.0) -> SignalResult:
-
-        if not (20 <= minute <= 80):
-            return SignalResult(False, None, 0.0, "Dakika disi", {})
-
-        total_da = home.da + away.da
-        if total_da == 0:
-            return SignalResult(False, None, 0.0, "DA yok", {})
-
-        home_da_ratio = home.da / total_da
-        away_da_ratio = away.da / total_da
-
-        # Baskin takim tespiti
-        if home_da_ratio > 0.6:
-            dom, dom_ratio, sig_type = "HOME", home_da_ratio, SignalType.EV_GOL
-            if ah_home >= 0:
-                return SignalResult(False, None, 0.0, "Ev favori degil(AH)", {})
-            dom_stats, dom_ah = home, ah_home
-            t_gol, r_gol = ev_gol, dep_gol
-        elif away_da_ratio > 0.6:
-            dom, dom_ratio, sig_type = "AWAY", away_da_ratio, SignalType.DEP_GOL
-            if ah_away <= 0:
-                return SignalResult(False, None, 0.0, "Dep favori degil(AH)", {})
-            dom_stats, dom_ah = away, ah_away
-            t_gol, r_gol = dep_gol, ev_gol
-        else:
-            # [AH-5] Corner deficit Signal Beta
-            corner_deficit_home = (home.korner < away.korner
-                                   and abs(ah_home) <= 0.50 and home.sot >= away.sot)
-            corner_deficit_away = (away.korner < home.korner
-                                   and abs(ah_away) <= 0.50 and away.sot >= home.sot)
-            if corner_deficit_home or corner_deficit_away:
-                dom = "HOME" if corner_deficit_home else "AWAY"
-                dom_stats = home if dom == "HOME" else away
-                dom_ah    = ah_home if dom == "HOME" else ah_away
-                sig_type  = SignalType.EV_GOL if dom == "HOME" else SignalType.DEP_GOL
-                dom_ratio = 0.50
-                t_gol = ev_gol if dom == "HOME" else dep_gol
-                r_gol = dep_gol if dom == "HOME" else ev_gol
-            else:
-                return SignalResult(False, None, 0.0, "Baskin yok", {})
-
-        if dom_stats.detect_fake_pressure():
-            return SignalResult(False, None, 0.0, "Sahte baski", {})
-
-        # [R3] F_pressure endeksi
-        f_val, sahte_f, f_msg = fpressure_endeks_hesapla(
-            dom_stats.korner, dom_stats.sot, dom_stats.da,
-            minute, t_gol, r_gol)
-        if sahte_f:
-            return SignalResult(False, None, 0.0, f"F_pressure: {f_msg}", {})
-
-        score  = 6.0 + (dom_ratio - 0.5) * 10
-        reason = f"{dom} baskin"
-
-        # [AH-1] Split analizi
-        ah_split  = ah_split_hesapla(dom_ah)
-        score    += ah_split.bonus_puan
-        reason   += f" | SPLIT:{ah_split.tip}(+{ah_split.bonus_puan:.1f})"
-
-        # [R1] AH kinetik
-        kinetik = AHKinetik()
-        if event_id:
-            kinetik = ah_hareket.kinetik_hesapla(
-                event_id, dom_ah,
-                abs(ev_gol - dep_gol), minute)
-            if kinetik.yon == 'daralma' and kinetik.clv_proxy > 0.1:
-                score  += 2.5
-                reason += f" | AH_DARALMA(v:{kinetik.velocity:+.3f})"
-            elif kinetik.yon == 'genisleme':
-                score  -= 1.5
-                reason += f" | AH_GENISLIYOR(v:{kinetik.velocity:+.3f})"
-
-            # AH ivme bonusu
-            if kinetik.acceleration > 0.05:
-                score  += 1.0
-                reason += f" | AH_IVME(a:{kinetik.acceleration:+.3f})"
-
-        # [R3] RLM skoru
-        if event_id:
-            rlm_p, rlm_tip = ah_hareket.rlm_skoru(
-                event_id, home_da_ratio, dom_ah)
-            if rlm_tip == "TRUE_RLM":
-                score  += 2.0
-                reason += f" | TRUE_RLM({rlm_p:.0%})"
-            elif rlm_tip == "FAKE_RLM":
-                score  -= 2.0
-                reason += f" | FAKE_RLM({rlm_p:.0%}) [WARN]"
-
-        # [R2] Proxy xT
-        xt, xt_msg = proxy_xt_hesapla(
-            dom_stats.sot, dom_stats.da, dom_stats.ta,
-            dom_stats.korner, t_gol, r_gol, minute)
-        score  += xt * 8
-        reason += f" | {xt_msg}"
-
-        # [AH-5] Corner deficit bonus
-        if dom_stats.korner < (away.korner if dom == "HOME" else home.korner):
-            c_fark = ((away.korner if dom == "HOME" else home.korner)
-                      - dom_stats.korner)
-            if c_fark >= 3 and abs(dom_ah) <= 0.50:
-                score  += 3.0
-                reason += f" | SIGNAL_BETA(?korner:{c_fark})"
-
-        # [R7] Match state entropy
-        if event_id:
-            ms = mac_entropisi.match_state_score(
-                event_id, minute, ev_gol, dep_gol)
-            if ms > 0.3:
-                score  += ms * 2
-                reason += f" | MS_ENTROPY:{ms:.2f}"
-
-        # [R10] Implied prob drift
-        if event_id:
-            drift = ah_hareket.implied_prob_drift(event_id)
-            if drift > 0.02:
-                score  += 1.5
-                reason += f" | IMPL_DRIFT:+{drift:.3f}"
-
-        # [R8] TVPS degerlendirmesi (market_odds varsa)
-        tvps_str = ""
-        if market_odds > 1.0:
-            tvps, kelly, ev_ok, tvps_msg = TVPSKatmani.hesapla(
-                da_ivmesi=home_da_ratio if dom == "HOME" else away_da_ratio,
-                proxy_xt=xt,
-                ah_momentum=kinetik.momentum_score,
-                true_rlm_prob=0.0,
-                corner_deficit=(dom_ratio == 0.50),
-                sahte_baski=False,
-                fpressure=f_val,
-                entropi=mac_entropisi.entropi_hesapla(event_id or '', minute)[0] if event_id else 0.5,
-                skor_bonus=0.0,
-                lig_carpan=LeagueFilter.get_league_multiplier(league_name),
-                market_odds=market_odds
-            )
-            if not ev_ok:
-                score  *= 0.7   # -EV ise puani dusur
-                reason += " | -EV(TVPS)"
-            else:
-                reason += f" | +EV(TVPS:{tvps:+.3f} K:{kelly:.2%})"
-            tvps_str = tvps_msg
-
-        return SignalResult(True, sig_type, round(score, 2), reason, {
-            'dom': dom, 'da_ratio': round(dom_ratio, 2),
-            'ah_split': ah_split.tip,
-            'xt': xt, 'fpressure': f_val,
-            'ah_velocity': kinetik.velocity,
-            'tvps': tvps_str
-        })
-
-
-# ============================================================================
-# IKINCI YARI GOL MODULU
-# ============================================================================
-
-class IY2Module:
-    @staticmethod
-    def check(minute: int, home: TeamStats, away: TeamStats,
-              home_score: int, away_score: int,
-              league_name: str = "",
-              event_id: str = "") -> SignalResult:
-
-        if 46 <= minute <= 65:
-            window, sig_t, base = "ERKEN", SignalType.IY2_GOL, 5.0
-        elif 76 <= minute <= 90:
-            window, sig_t, base = "GEC",   SignalType.IY2_GEC, 4.0
-        else:
-            return SignalResult(False, None, 0.0, "Dakika disi", {})
-
-        diff = abs(home_score - away_score)
-        if diff >= 3:
-            return SignalResult(False, None, 0.0, "Rolanti >=3", {})
-        if diff >= 2 and minute >= 75:
-            return SignalResult(False, None, 0.0, "Oyun yonetimi", {})
-        if home.sot + away.sot > 15:
-            return SignalResult(False, None, 0.0, "SOT doygunlugu", {})
-
-        total_da  = home.da + away.da
-        da_per_mn = total_da / minute if minute > 0 else 0
-
-        if minute >= 60 and da_per_mn < 0.8:
-            return SignalResult(False, None, 0.0,
-                f"Rolanti:momentum({da_per_mn:.2f})", {})
-        if da_per_mn < 1.0:
-            return SignalResult(False, None, 0.0, "DA dusuk", {})
-
-        # [R3] F_pressure kontrolu
-        f_val, sahte_f, _ = fpressure_endeks_hesapla(
-            home.korner + away.korner,
-            home.sot + away.sot,
-            total_da, minute, home_score, away_score)
-        if sahte_f:
-            return SignalResult(False, None, 0.0,
-                f"F_pressure sahte baski", {})
-
-        score  = base + min(da_per_mn, 3.0)
-        reason = f"IY2 {window}"
-
-        if 48 <= minute <= 58:
-            score  *= 2.0
-            reason += " | KIRILMA(x2.0)"
-
-        # [R7] Entropi + time decay
-        if event_id:
-            ms = mac_entropisi.match_state_score(
-                event_id, minute, home_score, away_score)
-            if ms > 0.35:
-                score  += ms * 4
-                reason += f" | MS:{ms:.2f}"
-            elif ms < 0.15:
-                score  *= 0.8
-                reason += f" | DUSUK_ENTROPI(x0.8)"
-
-        return SignalResult(True, sig_t, round(score, 2),
-                            reason, {'da_per_min': round(da_per_mn, 2),
-                                     'f_pressure': f_val})
-
-
-# ============================================================================
-# SINYAL KONSENSUS MOTORU
-# ============================================================================
-
-class SinyalKonsensus:
-    @staticmethod
-    def sec(sinyaller: List[SignalResult]) -> Optional[SignalResult]:
-        gecerli = [s for s in sinyaller if s and s.valid]
-        if not gecerli: return None
-        en_iyi = max(gecerli, key=lambda s: s.score)
-        if len(gecerli) > 1:
-            en_iyi.score  = round(en_iyi.score * 1.15, 2)
-            en_iyi.reason += f" | KONSENSUS(x1.15,{len(gecerli)}mod)"
-        return en_iyi
-
-
-# ============================================================================
-# VERI KORUMA KATMANI
-# ============================================================================
-
-class VeriKorumaKatmani:
-    def __init__(self):
-        self.s_kod   = {'S1':'SOT','S2':'Korner','S3':'TA','S4':'DA','SC':'Gol'}
-        self.anomali = 0
-        self.toplam  = 0
-
-    def yeni_format_parse(self, stats):
-        try:
-            if 'corners' in stats and isinstance(stats.get('corners'), list):
-                def _g(k, i): return stats.get(k, ['0','0'])[i]
-                ev  = {'S1':_g('on_target',0),'S2':_g('corners',0),
-                       'S3':_g('attacks',0),'S4':_g('dangerous_attacks',0),
-                       'SC':_g('goals',0)}
-                dep = {'S1':_g('on_target',1),'S2':_g('corners',1),
-                       'S3':_g('attacks',1),'S4':_g('dangerous_attacks',1),
-                       'SC':_g('goals',1)}
-                return ev, dep
-        except Exception as e:
-            logger.error(f"Parse:{e}")
-        return None
-
-    def veri_cikart_guvenli(self, ev_v, dep_v):
-        self.toplam += 1
-        ters = {v:k for k,v in self.s_kod.items()}
-        try:
-            veri = {
-                'ev_sot':     guvenli_int(ev_v.get(ters.get('SOT',    'S1'), 0)),
-                'ev_korner':  guvenli_int(ev_v.get(ters.get('Korner', 'S2'), 0)),
-                'ev_ta':      guvenli_int(ev_v.get(ters.get('TA',     'S3'), 0)),
-                'ev_da':      guvenli_int(ev_v.get(ters.get('DA',     'S4'), 0)),
-                'ev_gol':     guvenli_int(ev_v.get(ters.get('Gol',    'SC'), 0)),
-                'dep_sot':    guvenli_int(dep_v.get(ters.get('SOT',   'S1'), 0)),
-                'dep_korner': guvenli_int(dep_v.get(ters.get('Korner','S2'), 0)),
-                'dep_ta':     guvenli_int(dep_v.get(ters.get('TA',    'S3'), 0)),
-                'dep_da':     guvenli_int(dep_v.get(ters.get('DA',    'S4'), 0)),
-                'dep_gol':    guvenli_int(dep_v.get(ters.get('Gol',   'SC'), 0)),
-                # [K2] Kirmizi kart verileri - S7 kodu
-                'ev_kirmizi':  guvenli_int(ev_v.get('S7', 0)),
-                'dep_kirmizi': guvenli_int(dep_v.get('S7', 0)),
-            }
-            ta  = veri['ev_ta']  + veri['dep_ta']
-            da  = veri['ev_da']  + veri['dep_da']
-            sot = veri['ev_sot'] + veri['dep_sot']
-            gol = veri['ev_gol'] + veri['dep_gol']
-            if ta < da or da < sot or sot < gol: self.anomali += 1
-            return veri
-        except Exception as e:
-            logger.error(f"veri_cikart:{e}")
-            return None
-
-    def istatistik(self):
-        if self.toplam:
-            logger.info(f"VeriKoruma:{self.toplam} kontrol, "
-                        f"{self.anomali} anomali "
-                        f"(%{self.anomali/self.toplam*100:.1f})")
-
 
 veri_koruma = VeriKorumaKatmani()
 
@@ -2194,120 +1681,6 @@ async def asian_handicap_cek(event_id: str,
 
 # ============================================================================
 # SELF-TEST FONKSIYONLARI
-# ============================================================================
-
-def self_test_classify_live_signal():
-    """classify_live_signal() fonksiyonunun onemli kural testleri"""
-    tests = [
-        {
-            "name": "29dk 1-0 Gol Olacak <50 PASS",
-            "args": ("Gol Olacak (S)", 29, 1, 0, 1, 2, -0.75),
-            "expected": "PASS",
-        },
-        {
-            "name": "59dk 1-0 Gol Olacak IGNORE",
-            "args": ("Gol Olacak (S)", 59, 1, 0, 1, 2, -1.25),
-            "expected": "IGNORE",
-        },
-        {
-            "name": "60dk 1-0 Gol Olacak A+",
-            "args": ("Gol Olacak (S)", 60, 1, 0, 1, 0, -1.25),
-            "expected_in": ("A+", "A"),
-        },
-        {
-            "name": "60dk 1-0 Gol Olacak AH=0.5 PASS",
-            "args": ("Gol Olacak (S)", 60, 1, 0, 1, 2, 0.5),
-            "expected": "PASS",
-        },
-        {
-            "name": "50dk Ev Gol AH=0.5 PASS",
-            "args": ("Ev Gol Atacak (S)", 50, 1, 0, 1, 4, -0.50),
-            "expected": "PASS",
-        },
-        {
-            "name": "5dk 0-0 Gol Olacak <50 PASS",
-            "args": ("Gol Olacak (S)", 5, 0, 0, 0, 0, -1.75),
-            "expected": "PASS",
-        },
-        {
-            "name": "45dk Ev Gol 0-0 AH=0 B/log-only",
-            "args": ("Ev Gol Atacak (S)", 45, 0, 0, 1, 2, 0.0),
-            "expected_in": ("B", "LOW_VALUE", "PASS"),
-        },
-        {
-            "name": "5dk Ev Gol guclu AH ama cok erken PASS",
-            "args": ("Ev Gol Atacak (S)", 5, 0, 1, 1, 1, -1.25),
-            "expected": "PASS",
-        },
-        {
-            "name": "29dk Ev Gol AH=0.25 zayif PASS",
-            "args": ("Ev Gol Atacak (S)", 29, 0, 0, 1, 0, 0.25),
-            "expected": "PASS",
-        },
-    ]
-
-    logger.info("[SELFTEST] classify_live_signal() testleri basladi")
-    passed = 0
-    failed = 0
-    
-    for t in tests:
-        sonuc = classify_live_signal(*t["args"])
-        expected = t.get("expected")
-        expected_in = t.get("expected_in", ())
-        
-        if expected:
-            ok = sonuc["sinyal"] == expected
-        else:
-            ok = sonuc["sinyal"] in expected_in
-        
-        if ok:
-            logger.info(f"  [OK] {t['name']} -> {sonuc['sinyal']}")
-            passed += 1
-        else:
-            logger.warning(f"  [ERR] {t['name']} -> {sonuc['sinyal']} "
-                          f"(beklenen: {expected or expected_in})")
-            failed += 1
-    
-    logger.info(f"[SELFTEST] Sonuc: {passed} gecti, {failed} basarisiz")
-    return failed == 0
-
-
-def self_test_league_categories():
-    """LeagueFilter lig kategorileme testleri"""
-    tests = [
-        ("England Women Super League", "Chelsea Women", "Arsenal Women", 
-         LeagueCategory.ANALYSIS_ONLY),
-        ("Germany Bundesliga", "Bayern", "Dortmund", 
-         LeagueCategory.WHITELIST),
-        ("Taiwan Premier League", "A", "B", 
-         LeagueCategory.NEUTRAL),
-        ("eSoccer Battle", "A", "B", 
-         LeagueCategory.HARD_REJECT),
-        ("Brazil Serie A", "A", "B", 
-         LeagueCategory.KARANTINA),
-    ]
-
-    logger.info("[SELFTEST] LeagueFilter lig kategorileme testleri basladi")
-    passed = 0
-    failed = 0
-    
-    for league, home, away, expected_cat in tests:
-        allowed, category, reason = LeagueFilter.check_league(league, home, away)
-        
-        if category == expected_cat:
-            logger.info(f"  [OK] {league} -> {category.value}")
-            passed += 1
-        else:
-            logger.warning(f"  [ERR] {league} -> {category.value} "
-                          f"(beklenen: {expected_cat.value})")
-            failed += 1
-    
-    logger.info(f"[SELFTEST] Sonuc: {passed} gecti, {failed} basarisiz")
-    return failed == 0
-
-
-# ============================================================================
-# ANA ANALIZ MOTORU
 # ============================================================================
 
 async def mac_analiz_et(ev_v, dep_v, ev_adi, dep_adi, skor, dk,
@@ -2603,4 +1976,284 @@ async def mac_isle(bot, mac_data: dict,
             return None
         # ------------------------------------------------------------
         timer       = mac_data.get('timer', {})
-        dk          = guvenli_int(timer
+        dk          = guvenli_int(timer.get('tm',0)) if isinstance(timer,dict) else 0
+        skor        = mac_data.get('ss','0-0') or '0-0'
+
+        stats_data = None
+        try:
+            async with session.get(
+                f"https://api.betsapi.com/v1/event/view"
+                f"?token={BETSAPI_TOKEN}&event_id={mac_id}",
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as r:
+                if r.status == 200:
+                    ed = await r.json()
+                    if ed.get('success') == 1:
+                        res = ed.get('results', [])
+                        if res:
+                            s = res[0].get('stats', {})
+                            if s and isinstance(s, dict): stats_data = s
+        except Exception: pass
+
+        if not stats_data:
+            stats_data = mac_data.get('stats', {})
+        if not stats_data or not isinstance(stats_data, dict): return None
+
+        ev_v = dep_v = None
+        if 'corners' in stats_data and isinstance(stats_data.get('corners'), list):
+            r = VeriKorumaKatmani().yeni_format_parse(stats_data)
+            if r: ev_v, dep_v = r
+
+        if not ev_v or not dep_v:
+            ev_v  = stats_data.get('1', {})
+            dep_v = stats_data.get('2', {})
+        if not ev_v or not dep_v: return None
+
+        if (sum(1 for k in ev_v  if k.startswith('S')) == 0 or
+                sum(1 for k in dep_v if k.startswith('S')) == 0): return None
+
+        sonuc = await mac_analiz_et(
+            ev_v, dep_v, ev_adi, dep_adi, skor, dk,
+            bot, session, event_id=mac_id, league_name=league_name)
+        # mac_analiz_et (mesaj, gemini_mesaj) tuple veya None dondurur
+        if sonuc is None:
+            return None
+        if isinstance(sonuc, tuple):
+            return sonuc   # (ana_mesaj, gemini_mesaj)
+        return (sonuc, None)
+
+    except Exception as e:
+        logger.error(f"mac_isle:{e}"); return None
+
+
+# ============================================================================
+# TELEGRAM QUEUE
+# ============================================================================
+
+telegram_queue: asyncio.Queue = None
+
+
+async def telegram_gondericisi(bot):
+    """Telegram sira isleyici - Legacy mesaj filtreleri uygulanir"""
+    legacy_patterns = [
+        "[VIP] SINYAL",
+        "[TGT] EV GOL",
+        "[TGT] DEP GOL",
+        "[TGT] IY2 GOL",
+        "[TGT] IY GOL",
+        "TVPS:",
+        "Proxy xT",
+        "Fpressure",
+    ]
+    
+    while True:
+        try:
+            chat_id, mesaj = await telegram_queue.get()
+            
+            # [V57-FIX-11] Legacy mesaj engelleme
+            if BLOCK_LEGACY_DIAMOND_MESSAGES and isinstance(mesaj, str):
+                if any(p in mesaj for p in legacy_patterns):
+                    logger.warning(f"[V57] Legacy format mesaj engellendi: {mesaj[:50]}...")
+                    telegram_queue.task_done()
+                    continue
+            
+            try:
+                await bot.send_message(
+                    chat_id=chat_id, text=mesaj, parse_mode="Markdown")
+            except Exception as e:
+                # Markdown hatasi -> parse_mode kaldir ve tekrar dene
+                try:
+                    clean = mesaj.replace("*","").replace("_","").replace("`","")
+                    await bot.send_message(chat_id=chat_id, text=clean, parse_mode=None)
+                except Exception as e2:
+                    logger.error(f"TG fallback hatasi: {e2}")
+            finally:
+                telegram_queue.task_done()
+            await asyncio.sleep(1.5)
+        except Exception as e:
+            logger.error(f"TG queue:{e}")
+            await asyncio.sleep(1)
+
+
+# ============================================================================
+# ANA DONGU
+# ============================================================================
+
+async def ana_dongu():
+    global telegram_queue
+    telegram_queue = asyncio.Queue()
+    asyncio.create_task(loop_monitor.monitor())
+
+    try:
+        bot = Bot(token=TELEGRAM_TOKEN)
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=(
+                "[BOT] BOT V57 - CANLI SINYAL SINIFLANDIRICI\n\n"
+                "Motor: classify_live_signal()\n\n"
+                "SINYAL TIPLERI:\n"
+                "  [A+][A+] A+  - En guclu (%95+)\n"
+                "  [A+]  A   - Guclu (%90+)\n"
+                "  [OK]  B   - Orta (%75-90)\n"
+                "  [WARN]  LOW_VALUE - Dusuk guven\n"
+                "  [STOP]  PASS - Oynama / riskli\n"
+                "  [MUTE]  IGNORE - Erken / degersiz\n\n"
+                "KURALLAR:\n"
+                "* Gol Olacak(S): dk<50 kapali; dk>=60+gol=1+korner<=3+AH>=1.25 -> A+\n"
+                "* Ev Gol Atacak(S): AH yonu EV degilse A uretilmez\n"
+                "* Dep Gol Atacak(S): dk<=15 veya 0-0 -> B\n"
+                "* 0-59dk+gol=1+Gol Olacak -> IGNORE\n"
+                "* 46-60dk+AH+-0.5+Ev/Dep -> PASS\n"
+                "* 46-60dk+3-0+Ev Gol -> HARD_PASS\n* Team-goal AH yonu zorunlu: ters AH cezali\n* Neutral ligler: sadece A+; hedef takim ondeyse takim golu kapali\n* Kadin/genc/rezerv: ANALYSIS_ONLY, Telegram kapali\n\n"
+                "Eski Gemini/Claude/Excel filtreleri KALDIRILDI.\n"
+                "Sinyaller bekleniyor..."
+            ),
+            parse_mode=None
+        )
+        
+        # [V57] Self-test fonksiyonlarini calistir
+        logger.info("[V57] Self-test baslatiliyor...")
+        test1_ok = self_test_classify_live_signal()
+        test2_ok = True
+        
+        if test1_ok and test2_ok:
+            logger.info("[V57] [OK] Tum self-test'ler basarili")
+        else:
+            logger.warning("[V57] [WARN] Bazi self-test'ler basarisiz - ayarlari kontrol et")
+    
+    except Exception as e:
+        logger.error(f"Bot baslatma:{e}"); return
+
+    asyncio.create_task(telegram_gondericisi(bot))
+
+    async with aiohttp.ClientSession() as session:
+        dongu        = 0
+        aktif_maclar: list = []
+
+        while True:
+            dongu += 1
+            try:
+                async with api_rate_limiter:
+                    async with session.get(
+                        f"https://api.betsapi.com/v1/events/inplay"
+                        f"?sport_id=1&token={BETSAPI_TOKEN}",
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as resp:
+                        if resp.status != 200:
+                            await asyncio.sleep(60); continue
+                        data = await resp.json()
+
+                aktif_maclar = esnek_liste_duzelt(data.get('results', []))
+                logger.info(f"#{dongu} | {len(aktif_maclar)} mac")
+
+                async def isle(mac_data):
+                    try:
+                        sonuc = await mac_isle(bot, mac_data, session)
+                        if sonuc is None:
+                            return
+                        # Tek mesaj veya tuple (ana, gemini)
+                        # 2 veya 3 elemanli tuple
+                        if isinstance(sonuc, tuple):
+                            if len(sonuc) == 3:
+                                ana_mesaj, gemini_mesaj, extra_mesaj = sonuc
+                            else:
+                                ana_mesaj, gemini_mesaj = sonuc
+                                extra_mesaj = None
+                        else:
+                            ana_mesaj, gemini_mesaj, extra_mesaj = sonuc, None, None
+                        # 1. Ana sinyal
+                        if ana_mesaj:
+                            await telegram_queue.put((CHAT_ID, ana_mesaj))
+                        # 2. Gemini ek bildirimi
+                        if gemini_mesaj:
+                            await asyncio.sleep(0.5)
+                            await telegram_queue.put((CHAT_ID, gemini_mesaj))
+                        # 3. Excel Top 10 / Claude AH / Excel Oran bildirimi
+                        if extra_mesaj:
+                            await asyncio.sleep(0.5)
+                            await telegram_queue.put((CHAT_ID, extra_mesaj))
+                    except Exception as e:
+                        logger.error(f"isle:{e}")
+
+                await asyncio.gather(
+                    *[isle(m) for m in aktif_maclar],
+                    return_exceptions=True)
+
+                if dongu % 10 == 0:
+                    s = api_rate_limiter.stats()
+                    logger.info(f"Rate:{s['total']} req, {s['throttled']} throttled")
+                    veri_koruma.istatistik()
+
+            except Exception as e:
+                logger.error(f"Ana:{e}")
+                import traceback; logger.error(traceback.format_exc())
+
+            await asyncio.sleep(dongu_suresi_hesapla(aktif_maclar))
+
+
+# ============================================================================
+# GIRIS
+# ============================================================================
+
+
+# ============================================================================
+# V57 SELF TEST
+# ============================================================================
+
+def self_test_v57():
+    """V57 cekirdek siniflandirici hizli testleri."""
+    tests = [
+        ("29dk 1-0 Gol Olacak ignore", ("Gol Olacak (S)", 29, 1, 0, 1, 2, -0.75), "IGNORE"),
+        ("59dk 1-0 Gol Olacak ignore", ("Gol Olacak (S)", 59, 1, 0, 1, 2, -1.25), "IGNORE"),
+        ("60dk 1-0 Gol Olacak A/A+", ("Gol Olacak (S)", 60, 1, 0, 1, 2, -1.25), ("A+", "A")),
+        ("50dk Ev Gol AH0.5 PASS", ("Ev Gol Atacak (S)", 50, 1, 0, 1, 4, -0.50), "PASS"),
+        ("Pisa ev gol ters AH Telegram disi", ("Ev Gol Atacak (S)", 21, 0, 1, 1, 2, +1.00), ("B", "LOW_VALUE", "PASS")),
+        ("Napoli dep gol yon dogru ama hedef onde -> Telegram disi", ("Dep Gol Atacak (S)", 21, 0, 1, 1, 2, +1.00), ("LOW_VALUE", "B")),
+        ("Lipno 0-2 erken Gol Olacak IGNORE", ("Gol Olacak (S)", 12, 0, 2, 0, 0, +1.00), "IGNORE"),
+    ]
+
+    ok_all = True
+    for name, args, expected in tests:
+        sonuc = classify_live_signal(*args)
+        got = sonuc["sinyal"]
+        if isinstance(expected, tuple):
+            ok = got in expected
+        else:
+            ok = got == expected
+        ok_all = ok_all and ok
+        logger.info(f"[SELFTEST] {name}: got={got}, expected={expected}, ok={ok}")
+    return ok_all
+
+
+def self_test_league_categories():
+    """LeagueCategory hizli testleri."""
+    tests = [
+        ("England Women Super League", "Chelsea Women", "Arsenal Women", LeagueCategory.ANALYSIS_ONLY),
+        ("Germany Bundesliga", "Bayern", "Dortmund", LeagueCategory.WHITELIST),
+        ("Taiwan Premier League", "A", "B", LeagueCategory.NEUTRAL),
+        ("Esoccer Battle", "A", "B", LeagueCategory.HARD_REJECT),
+        ("Poland III Liga", "Lech Poznan II", "Zawisza Bydgoszcz", LeagueCategory.ANALYSIS_ONLY),
+    ]
+    ok_all = True
+    for league, home, away, expected in tests:
+        allowed, category, reason = LeagueFilter.check_league(league, home, away)
+        ok = category == expected
+        ok_all = ok_all and ok
+        logger.info(f"[LEAGUE TEST] {league} / {home}-{away}: got={category.value}, expected={expected.value}, ok={ok}, reason={reason}")
+    return ok_all
+
+
+if __name__ == "__main__":
+    logger.info("[BOT] Bot V57 Baslatiliyor...")  # [V57-FIX-6]
+    logger.info(
+        f"TG:{'[OK]' if TELEGRAM_TOKEN else '[ERR]'} | "
+        f"Chat:{'[OK]' if CHAT_ID else '[ERR]'} | "
+        f"API:{'[OK]' if BETSAPI_TOKEN else '[ERR]'}"
+    )
+    try:
+        asyncio.run(ana_dongu())
+    except KeyboardInterrupt:
+        logger.info("Bot durduruldu")
+    except Exception as e:
+        logger.error(f"Kritik:{e}")
+        import traceback; logger.error(traceback.format_exc())
